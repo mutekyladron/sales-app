@@ -1,0 +1,25 @@
+{
+  "name": "Sales Report App — Secrets Mirabel",
+  "short_name": "Sales Mirabel",
+  "description": "App de reporte de ventas para Secrets Mirabel",
+  "start_url": "/sales-app/",
+  "scope": "/sales-app/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#070b14",
+  "theme_color": "#070b14",
+  "icons": [
+    {
+      "src": "https://via.placeholder.com/192x192/070b14/00e5b8?text=SM",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://via.placeholder.com/512x512/070b14/00e5b8?text=SM",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
