@@ -1,0 +1,2299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sales Mirabel">
+<meta name="theme-color" content="#070b14">
+<meta name="description" content="Sales Report App — Secrets Mirabel">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<title>Sales Report App — Secrets Mirabel</title>
+<style>
+:root{
+  --bg:#070b14;
+  --surf:#0d1526;
+  --card:#101c30;
+  --brd:#1a2d4a;
+  --acc:#00e5b8;
+  --txt:#e8f0ff;
+  --mut:#7a90b8;
+  --fs-xs:11px;
+  --fs-sm:13px;
+  --fs-md:15px;
+  --fs-lg:18px;
+  --fs-xl:22px;
+  --fs-xxl:28px;
+  --r:12px;
+  --pad:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{
+  width:100%;height:100%;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  font-size:15px;
+  background:var(--bg);
+  color:var(--txt);
+  -webkit-text-size-adjust:none;
+  text-size-adjust:none;
+  overflow-x:hidden;
+}
+#app{
+  width:100%;
+  min-height:100vh;
+  background:var(--bg);
+  padding-bottom:72px;
+}
+input,select,textarea{
+  background:var(--surf);
+  border:1.5px solid var(--brd);
+  border-radius:10px;
+  padding:11px 13px;
+  color:var(--txt);
+  font-family:inherit;
+  font-size:15px;
+  width:100%;
+  margin-bottom:8px;
+  outline:none;
+  -webkit-appearance:none;
+  appearance:none;
+}
+button{cursor:pointer;font-family:inherit;}
+::-webkit-scrollbar{width:3px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--brd);border-radius:4px}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:200;display:flex;align-items:flex-end}
+.modal-inner{background:var(--surf);border:1px solid var(--brd);border-radius:20px 20px 0 0;width:100%;max-height:93vh;overflow-y:auto;padding:20px 16px 50px}
+</style>
+
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ── FIREBASE REST API (sin scripts externos — funciona en iOS) ─────────────
+const FB_PROJECT = "secrets-mirabel";
+const FB_KEY = "AIzaSyAvFS3gf9QR46yNtjDnG6tYZFthZMe0IMo";
+const FB_URL = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/datos`;
+
+async function fbGet(doc){
+  try{
+    const r=await fetch(`${FB_URL}/${doc}?key=${FB_KEY}`);
+    if(!r.ok)return null;
+    const j=await r.json();
+    if(!j.fields||!j.fields.lista)return null;
+    return JSON.parse(j.fields.lista.stringValue);
+  }catch(e){console.warn("fbGet error:",e);return null;}
+}
+
+async function fbSet(doc,data){
+  try{
+    const body={fields:{lista:{stringValue:JSON.stringify(data)}}};
+    await fetch(`${FB_URL}/${doc}?key=${FB_KEY}`,{
+      method:"PATCH",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body)
+    });
+  }catch(e){console.warn("fbSet error:",e);}
+}
+
+async function guardarEnFirebase(){
+  try{
+    const usersParaFirebase=users.map(u=>({...u,foto:null}));
+    await fbSet("users",usersParaFirebase);
+    await fbSet("ventas",ventas);
+    await fbSet("zonas",zonas);
+    await fbSet("linea",lineaData);
+    await fbSet("tours",toursData);
+  }catch(e){console.warn("Error Firebase:",e);}
+}
+
+let syncInterval=null;
+async function sincronizarDesdeFirebase(){
+  try{
+    const fu=await fbGet("users");
+    if(fu&&fu.length>0&&JSON.stringify(fu.map(u=>({...u,foto:null})))!==JSON.stringify(users.map(u=>({...u,foto:null})))){
+      fu.forEach(u=>{const local=users.find(l=>l.id===u.id);if(local&&local.foto)u.foto=local.foto;});
+      users=fu;
+      try{localStorage.setItem("smirabel_users",JSON.stringify(users));}catch(e){}
+      const idx=users.findIndex(u=>u.id===LOGIN.userId);
+      if(idx>=0)S.cuIdx=idx;
+      if(LOGIN.activo)render();
+    }
+    const fv=await fbGet("ventas");
+    if(fv&&fv.length>0&&JSON.stringify(fv)!==JSON.stringify(ventas)){
+      ventas=fv;
+      try{localStorage.setItem("smirabel_ventas",JSON.stringify(ventas));}catch(e){}
+      if(LOGIN.activo)render();
+    }
+    const fz=await fbGet("zonas");
+    if(fz&&JSON.stringify(fz)!==JSON.stringify(zonas)){
+      zonas=fz;
+      try{localStorage.setItem("smirabel_zonas",JSON.stringify(zonas));}catch(e){}
+      if(LOGIN.activo)render();
+    }
+    const fl=await fbGet("linea");
+    if(fl&&JSON.stringify(fl)!==JSON.stringify(lineaData)){
+      lineaData=fl;
+      try{localStorage.setItem("smirabel_linea",JSON.stringify(lineaData));}catch(e){}
+      if(LOGIN.activo)render();
+    }
+  }catch(e){console.warn("Sync error:",e);}
+}
+
+function iniciarSincronizacion(){
+  // Sincronizar cada 10 segundos
+  sincronizarDesdeFirebase();
+  if(syncInterval)clearInterval(syncInterval);
+  syncInterval=setInterval(sincronizarDesdeFirebase,10000);
+}
+
+// ── CONSTANTES ────────────────────────────────────────────────────────────
+const C={bg:"#070b14",surf:"#0d1526",card:"#101c30",brd:"#1a2d4a",acc:"#00e5b8",gold:"#ffd166",red:"#ff4757",blue:"#4e9eff",pur:"#9f7aea",ora:"#ff9f43",txt:"#e8f0ff",mut:"#7a90b8"};
+const DIAS_SEM=["Dom","Lun","Mar","Mie","Jue","Vie","Sab"];
+const MESES_C=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+const MESES=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const MEMBS=["Choices","Pearl","Emerald","Silver","Gold","Platinum","Diamond","Impressions","Black Impressions"];
+// Zonas y hoteles — editables por Manager-Cerrador
+const ZONAS_BASE={
+  "Zona Norte":{
+    hoteles:["Secrets Mirabel","Dreams Playa Mujeres","Secrets Playa Blanca","Hyatt Ziva"],
+    locs:{
+      "Secrets Mirabel":   ["TK1","SOC"],
+      "Dreams Playa Mujeres": ["SV1","SOC"],
+      "Secrets Playa Blanca": ["DD1","SOC"],
+      "Hyatt Ziva":        ["YG1","SOC"]
+    }
+  },
+  "Zona Sur":{
+    hoteles:[],
+    locs:{}
+  },
+  "Externo":{
+    hoteles:["Isla Impressions"],
+    locs:{
+      "Isla Impressions":  ["OH","EH1","QB1","BR1","MS1","DR1"]
+    }
+  }
+};
+// Todas las locaciones base del reporte WA
+const LOCS_BASE=["TK1","SOC","SV1","DD1","YG1","OH","EH1","QB1","BR1","MS1","DR1"];
+const POS_REP=["Liner","FTM","FTB"];
+let BUDGET=+(localStorage.getItem("smirabel_budget")||1500000);
+const hoy=new Date();
+const PAD=n=>String(n).padStart(2,"0");
+const FMT=n=>"$"+new Intl.NumberFormat("es-MX",{maximumFractionDigits:0}).format(n||0);
+const FMTK=n=>Math.abs(n)>=1e6?"$"+(n/1e6).toFixed(1)+"M":Math.abs(n)>=1000?"$"+(n/1000).toFixed(0)+"K":FMT(n);
+const rolC=r=>({"Manager-Cerrador":C.gold,"Cerrador":C.pur,"Vendedor":C.acc}[r]||C.mut);
+const posC=p=>({Liner:C.blue,FTM:C.ora,FTB:C.gold,Cerrador:C.pur,"Manager-Cerrador":C.gold}[p]||C.mut);
+const stC=s=>({Activo:C.acc,"Day Off":C.pur,Falta:C.red,"Castigo/Promo":C.ora,Vacaciones:C.blue,Permiso:C.gold}[s]||C.mut);
+const todayStr=()=>hoy.toISOString().split("T")[0];
+const filtMes=(v,mo,yr)=>v.filter(x=>{const d=new Date(x.fecha);return d.getMonth()===mo&&d.getFullYear()===yr;});
+const filtAnio=(v,yr)=>v.filter(x=>new Date(x.fecha).getFullYear()===yr);
+const filtDia=(v,f)=>v.filter(x=>x.fecha===f);
+const volNeto=arr=>arr.filter(v=>v.tipo!=="Cancelacion"&&!v.cancelado).reduce((a,v)=>a+v.vol,0)-arr.filter(v=>v.tipo==="Cancelacion").reduce((a,v)=>a+v.vol,0);
+const volNetoU=(arr,uid,c)=>volNeto(arr.filter(v=>v[c]===uid));
+
+// ── DATOS BASE (solo se usan si no hay nada guardado) ─────────────────────
+const USERS_BASE=[
+  {id:1,n:"Cristobal Ladron de Guevara",nombre:"Cristobal",apellido:"Ladron de Guevara",rol:"Manager-Cerrador",posicion:"Manager-Cerrador",av:"CL",foto:null,activo:true,pin:"0828",nacimiento:"",cel:"",email:"",zona:"Zona Norte",hotel:"Secrets Mirabel",dayOff:[],vacaciones:[],permisos:[]},
+];
+const VENTAS_BASE=[];
+
+// ── PERSISTENCIA ─────────────────────────────────────────────────────────
+function guardarDatos(){
+  try{
+    localStorage.setItem("smirabel_users",JSON.stringify(users));
+    localStorage.setItem("smirabel_ventas",JSON.stringify(ventas));
+    localStorage.setItem("smirabel_zonas",JSON.stringify(zonas));
+    localStorage.setItem("smirabel_linea",JSON.stringify(lineaData));
+    localStorage.setItem("smirabel_tours",JSON.stringify(toursData));
+    localStorage.setItem("smirabel_budget",String(BUDGET));
+  }catch(e){console.warn("Error localStorage:",e);}
+  guardarEnFirebase();
+}
+
+// PROTECCION: verificar que Firebase tiene datos antes de cualquier operacion critica
+async function verificarIntegridadFirebase(){
+  try{
+    const fu=await fbGet("users");
+    // Si Firebase tiene mas usuarios que los datos base, todo bien
+    if(fu&&fu.length>USERS_BASE.length){
+      console.log("Firebase OK: "+fu.length+" usuarios");
+      return true;
+    }
+    // Si Firebase tiene exactamente los mismos que los base, sincronizar local
+    if(fu&&fu.length>0){
+      return true;
+    }
+    return false;
+  }catch(e){return false;}
+}
+
+// Cargar desde localStorage (respaldo local)
+
+
+// Inicializar — siempre parte de los datos base
+let users=JSON.parse(JSON.stringify(USERS_BASE));
+let ventas=JSON.parse(JSON.stringify(VENTAS_BASE));
+let zonas=JSON.parse(JSON.stringify(ZONAS_BASE));
+// lineaData: registro diario de parejas tomadas por cada usuario
+// Estructura: { "YYYY-MM-DD": { userId: {tomoPareja:bool, vendioVol:number} } }
+let lineaData={};
+// toursData: registro de tours por dia por usuario
+// { "YYYY-MM-DD": { userId: {qs:N, cts:N} } }
+let toursData={};
+
+// Cargar local primero SOLO si no son datos demo
+// (evita que datos demo de versiones anteriores sobreescriban datos reales)
+function cargarDesdeLocal(){
+  try{
+    const u=localStorage.getItem("smirabel_users");
+    const v=localStorage.getItem("smirabel_ventas");
+    const z=localStorage.getItem("smirabel_zonas");
+    if(u){
+      const parsed=JSON.parse(u);
+      const esDemo=parsed.length===USERS_BASE.length&&parsed.every((p,i)=>p.id===USERS_BASE[i]?.id&&p.n===USERS_BASE[i]?.n);
+      if(!esDemo)users=parsed;
+    }
+    if(v)ventas=JSON.parse(v);
+    if(z)zonas=JSON.parse(z);
+    const ld=localStorage.getItem("smirabel_linea");
+    if(ld)lineaData=JSON.parse(ld);
+    const td2=localStorage.getItem("smirabel_tours");
+    if(td2)toursData=JSON.parse(td2);
+  }catch(e){console.warn("Error local:",e);}
+}
+cargarDesdeLocal();
+
+// ── REGLA DE ORO: Firebase SIEMPRE gana sobre datos base ─────────────────
+// Los datos base (USERS_BASE) son solo el punto de partida si Firebase
+// no tiene nada. Una vez que hay datos reales en Firebase, NUNCA se
+// sobreescriben con datos base, sin importar que archivo se descargue.
+async function cargarDesdeFirebase(){
+  try{
+    const fu=await fbGet("users");
+    const fv=await fbGet("ventas");
+    const fz=await fbGet("zonas");
+
+    // USUARIOS: Firebase manda siempre que tenga datos reales
+    if(fu&&fu.length>0){
+      // Preservar fotos locales (no se guardan en Firebase)
+      fu.forEach(u=>{
+        const local=users.find(l=>l.id===u.id);
+        if(local&&local.foto)u.foto=local.foto;
+      });
+      users=fu;
+      try{localStorage.setItem("smirabel_users",JSON.stringify(users));}catch(e){}
+    } else {
+      // Firebase vacio — subir datos actuales para que queden guardados
+      // Esto solo pasa la primera vez que se usa la app
+      await guardarEnFirebase();
+    }
+
+    // VENTAS: Firebase manda siempre
+    if(fv&&fv.length>=0){
+      ventas=fv;
+      try{localStorage.setItem("smirabel_ventas",JSON.stringify(ventas));}catch(e){}
+    }
+
+    // ZONAS: Firebase manda siempre
+    if(fz&&Object.keys(fz).length>0){
+      zonas=fz;
+      try{localStorage.setItem("smirabel_zonas",JSON.stringify(zonas));}catch(e){}
+    }
+
+    // LINEA: cargar registros de parejas
+    const fl=await fbGet("linea");
+    if(fl&&Object.keys(fl).length>0){
+      lineaData=fl;
+      try{localStorage.setItem("smirabel_linea",JSON.stringify(lineaData));}catch(e){}
+    }
+
+  }catch(e){
+    console.warn("Firebase no disponible, usando datos locales:",e);
+    // Sin internet: usar lo que hay en localStorage (ya cargado antes)
+  }
+  // Actualizar login con datos reales
+  renderLogin();
+}
+
+// ── LOGIN ────────────────────────────────────────────────────────────────
+let LOGIN={activo:false,userId:null,pinBuffer:"",pinError:"",paso:1,selUserId:null};
+
+function renderLogin(){
+  const C2={bg:"#070b14",surf:"#0d1526",card:"#101c30",brd:"#1a2d4a",acc:"#00e5b8",gold:"#ffd166",red:"#ff4757",blue:"#4e9eff",pur:"#9f7aea",mut:"#7a90b8",txt:"#e8f0ff"};
+  const vendedores=users.filter(u=>u.activo&&u.rol==="Vendedor");
+  const privilegiados=users.filter(u=>u.activo&&(u.rol==="Cerrador"||u.rol==="Manager-Cerrador"));
+
+  if(LOGIN.paso===1){
+    // Pantalla principal: elegir tipo
+    document.getElementById("app").innerHTML=`
+      <div style="min-height:100vh;min-height:-webkit-fill-available;background:#070b14;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px">
+        <div style="margin-bottom:28px;text-align:center">
+          <div style="font-size:26px;font-weight:900;color:#00e5b8;letter-spacing:1px">SALES REPORT APP</div>
+          <div style="font-size:26px;color:#7a90b8;font-weight:700;letter-spacing:2px;margin-top:4px">SECRETS MIRABEL</div>
+        </div>
+        <div style="width:100%;max-width:360px">
+          <div style="font-size:26px;color:#7a90b8;font-weight:800;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px">Selecciona tu perfil</div>
+          ${privilegiados.map(u=>`
+            <div onclick="loginSelectUser(${u.id})" style="display:flex;align-items:center;gap:12px;background:#101c30;border:1px solid ${u.rol==='Manager-Cerrador'?'#ffd16655':'#9f7aea55'};border-radius:14px;padding:16px;margin-bottom:10px;cursor:pointer">
+              <${u.foto?`<img src="${u.foto}" style="width:44px;height:44px;border-radius:50%;border:2px solid ${u.rol==='Manager-Cerrador'?'#ffd166':'#9f7aea'};object-fit:cover;flex-shrink:0">`:`<div style="width:44px;height:44px;border-radius:50%;background:${u.rol==='Manager-Cerrador'?'#ffd16622':'#9f7aea22'};border:2px solid ${u.rol==='Manager-Cerrador'?'#ffd166':'#9f7aea'};display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:900;color:${u.rol==='Manager-Cerrador'?'#ffd166':'#9f7aea'};flex-shrink:0">${u.av||u.n.slice(0,2).toUpperCase()}</div>`}
+              <div style="flex:1"><div style="font-size:26px;font-weight:800">${u.n}</div><div style="font-size:19px;color:${u.rol==='Manager-Cerrador'?'#ffd166':'#9f7aea'};font-weight:700;margin-top:2px">${u.rol}</div></div>
+              <div style="font-size:21px;color:#1a2d4a">&#128274;</div>
+            </div>
+          `).join("")}
+          <div style="margin:16px 0 10px;border-top:1px solid #1a2d4a;padding-top:16px">
+            <div style="font-size:26px;color:#7a90b8;font-weight:800;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px">Acceso sin PIN</div>
+            ${vendedores.map(u=>`
+              <div onclick="loginVendedor(${u.id})" style="display:flex;align-items:center;gap:12px;background:#101c30;border:1px solid #00e5b822;border-radius:14px;padding:12px 14px;margin-bottom:10px;cursor:pointer">
+                <${u.foto?`<img src="${u.foto}" style="width:38px;height:38px;border-radius:50%;border:2px solid #00e5b8;object-fit:cover;flex-shrink:0">`:`<div style="width:38px;height:38px;border-radius:50%;background:#00e5b822;border:2px solid #00e5b8;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:900;color:#00e5b8;flex-shrink:0">${u.av||u.n.slice(0,2).toUpperCase()}</div>`}
+                <div style="flex:1"><div style="font-size:19px;font-weight:800">${u.n}</div><div style="font-size:19px;color:#00e5b8;font-weight:700;margin-top:1px">${u.posicion}</div></div>
+                <div style="font-size:19px;color:#00e5b8;font-weight:800">Entrar</div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if(LOGIN.paso===2){
+    // Pantalla PIN
+    const u=users.find(u=>u.id===LOGIN.selUserId);
+    if(!u)return;
+    const puntos=LOGIN.pinBuffer.length;
+    document.getElementById("app").innerHTML=`
+      <div style="min-height:100vh;min-height:-webkit-fill-available;background:#070b14;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px">
+        <div style="width:100%;max-width:320px">
+          <button onclick="loginVolver()" style="background:none;border:none;color:#7a90b8;font-size:19px;font-weight:800;margin-bottom:20px;padding:0">← Volver</button>
+          <div style="text-align:center;margin-bottom:28px">
+            <${u.foto?`<img src="${u.foto}" style="width:60px;height:60px;border-radius:50%;border:2px solid ${u.rol==='Manager-Cerrador'?'#ffd166':'#9f7aea'};object-fit:cover;margin:0 auto 12px;display:block">`:`<div style="width:60px;height:60px;border-radius:50%;background:${u.rol==='Manager-Cerrador'?'#ffd16622':'#9f7aea22'};border:2px solid ${u.rol==='Manager-Cerrador'?'#ffd166':'#9f7aea'};display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:900;color:${u.rol==='Manager-Cerrador'?'#ffd166':'#9f7aea'};margin:0 auto 12px">${u.av||u.n.slice(0,2).toUpperCase()}</div>`}
+            <div style="font-size:19px;font-weight:900">${u.n}</div>
+            <div style="font-size:26px;color:${u.rol==='Manager-Cerrador'?'#ffd166':'#9f7aea'};font-weight:700;margin-top:4px">${u.rol}</div>
+          </div>
+          <div style="font-size:21px;color:#7a90b8;font-weight:800;text-align:center;margin-bottom:16px">INGRESA TU PIN</div>
+          <div style="display:flex;justify-content:center;gap:14px;margin-bottom:10px">
+            ${[0,1,2,3].map(i=>`<div style="width:16px;height:16px;border-radius:50%;background:${i<puntos?'#00e5b8':'#1a2d4a'};transition:background .15s"></div>`).join("")}
+          </div>
+          ${LOGIN.pinError?`<div style="text-align:center;color:#ff4757;font-size:21px;font-weight:800;margin-bottom:10px">${LOGIN.pinError}</div>`:""}
+          <div style="height:8px"></div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px">
+            ${[1,2,3,4,5,6,7,8,9,"←",0,"OK"].map(k=>`
+              <button onclick="loginPinKey('${k}')" style="background:#101c30;border:1px solid #1a2d4a;border-radius:14px;padding:18px;font-size:${k==='OK'||k==='←'?16:20}px;font-weight:900;color:${k==='OK'?'#00e5b8':k==='←'?'#ff4757':'#e8f0ff'};border-color:${k==='OK'?'#00e5b855':k==='←'?'#ff475755':'#1a2d4a'}">${k}</button>
+            `).join("")}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+}
+
+window.loginSelectUser=id=>{LOGIN.selUserId=id;LOGIN.paso=2;LOGIN.pinBuffer="";LOGIN.pinError="";renderLogin();};
+window.loginVendedor=id=>{LOGIN.activo=true;LOGIN.userId=id;S.cuIdx=users.findIndex(u=>u.id===id);iniciarSincronizacion();render();};
+window.loginVolver=()=>{LOGIN.paso=1;LOGIN.pinBuffer="";LOGIN.pinError="";renderLogin();};
+window.loginPinKey=k=>{
+  if(k==="←"){LOGIN.pinBuffer=LOGIN.pinBuffer.slice(0,-1);LOGIN.pinError="";renderLogin();return;}
+  if(k==="OK"||LOGIN.pinBuffer.length>=4){
+    const pin=k==="OK"?LOGIN.pinBuffer:LOGIN.pinBuffer+k;
+    const u=users.find(u=>u.id===LOGIN.selUserId);
+    if(u&&u.pin===pin){LOGIN.activo=true;LOGIN.userId=u.id;S.cuIdx=users.findIndex(u=>u.id===LOGIN.userId);iniciarSincronizacion();render();}
+    else{LOGIN.pinError="PIN incorrecto";LOGIN.pinBuffer="";renderLogin();}
+    return;
+  }
+  LOGIN.pinBuffer+=String(k);
+  if(LOGIN.pinBuffer.length===4){
+    const u=users.find(u=>u.id===LOGIN.selUserId);
+    if(u&&u.pin===LOGIN.pinBuffer){LOGIN.activo=true;LOGIN.userId=u.id;S.cuIdx=users.findIndex(u=>u.id===LOGIN.userId);iniciarSincronizacion();render();}
+    else{LOGIN.pinError="PIN incorrecto";LOGIN.pinBuffer="";renderLogin();}
+    return;
+  }
+  renderLogin();
+};
+window.cerrarSesion=()=>{LOGIN.activo=false;LOGIN.userId=null;LOGIN.paso=1;LOGIN.pinBuffer="";LOGIN.pinError="";renderLogin();};
+
+// ── ESTADO DE UI ──────────────────────────────────────────────────────────
+let S={
+  tab:"r",vista:"mes",selMo:hoy.getMonth(),selYr:hoy.getFullYear(),cuIdx:0,
+  showAllR:false,showAllC:false,showWA:false,showLineaWA:false,waNum:"",
+  modal:null,calSel:null,calMo:hoy.getMonth(),calYr:hoy.getFullYear(),
+  eqTab:"r",showAdd:false,detalleId:null,detTab:"stats",
+  cxlStep:1,cxlR:[],cxlOrig:null,cxlFecha:"",
+  locsExtra:[],dRep:null,
+  nuRol:"Vendedor",nuPos:"Liner",nuZona:"",nuHotel:"",
+  lineaFecha:null,
+  lineaTab:"reps",
+  mvpPeriodo:"mes",
+  tourModal:null, // {fecha, uid, qs:0, cts:0}
+  calAccion:null, // "venta","cxl","tour","status" // "mes" o "anio"
+  mvpSelMo:new Date().getMonth(),
+  mvpSelYr:new Date().getFullYear(),
+  vf:{contrato:"",tipo:"Agencia",mem:"Gold",vol:"",eng:"",cliente:"",rep_id:"",cerr_id:"",loc:"TK1",premiere:"",turquia:"",flybacks:"",qs:"",cts:"",notas:"",fecha:""},
+  // formularios en detalle
+  vacDesde:"",vacHasta:"",vacNota:"",
+  permFecha:todayStr(),permTipo:"Permiso",permNota:"",permCastigos:1,
+};
+const cu=()=>users[S.cuIdx]||users[0];
+const isMgr=()=>cu().rol==="Manager-Cerrador";
+const isRep=()=>cu().rol==="Vendedor";
+const getName=id=>(users.find(u=>u.id===id)||{n:"--"}).n;
+const allLocs=()=>{
+  const locs=new Set(LOCS_BASE);
+  Object.values(zonas).forEach(z=>Object.values(z.locs||{}).forEach(arr=>arr.forEach(l=>locs.add(l))));
+  S.locsExtra.forEach(l=>locs.add(l));
+  return [...locs];
+};
+// Todas las locaciones agrupadas por zona/hotel para el selector
+const locsParaSelector=()=>{
+  const grupos=[];
+  Object.entries(zonas).forEach(([zona,zdata])=>{
+    if((zdata.hoteles||[]).length===0)return;
+    (zdata.hoteles||[]).forEach(hotel=>{
+      const locs=zdata.locs[hotel]||[];
+      if(locs.length>0)grupos.push({zona,hotel,locs});
+    });
+  });
+  return grupos;
+};
+
+// ── STATUS DEL DÍA para un usuario ────────────────────────────────────────
+function statusDia(u, fechaStr){
+  if(!fechaStr)fechaStr=todayStr();
+  const d=new Date(fechaStr+"T12:00:00");
+  const diaSem=d.getDay(); // 0=Dom
+  // 1. Vacaciones
+  const enVac=(u.vacaciones||[]).some(v=>{
+    const desde=new Date(v.desde+"T00:00:00"),hasta=new Date(v.hasta+"T23:59:59");
+    return d>=desde&&d<=hasta;
+  });
+  if(enVac)return{status:"Vacaciones",detalle:""};
+  // 2. Permiso/Falta/Castigo registrado para esa fecha
+  const perm=(u.permisos||[]).find(p=>p.fecha===fechaStr);
+  if(perm)return{status:perm.tipo,detalle:perm.nota,castigos:perm.castigos||0};
+  // 3. Day Off (día de la semana)
+  if((u.dayOff||[]).includes(diaSem))return{status:"Day Off",detalle:DIAS_SEM[diaSem]};
+  return{status:"Activo",detalle:""};
+}
+// ¿Trabaja hoy?
+function trabajaHoy(u,fechaStr){
+  const s=statusDia(u,fechaStr);
+  return s.status==="Activo";
+}
+
+// ── HTML HELPERS ──────────────────────────────────────────────────────────
+const tag=(t,c)=>`<span style="background:${c||C.acc}22;color:${c||C.acc};border-radius:20px;padding:2px 8px;font-size:19px;font-weight:800;margin-right:3px;display:inline-block">${t}</span>`;
+const lbl=t=>`<div style="font-size:21px;color:${C.mut};font-weight:800;margin-bottom:3px;text-transform:uppercase;letter-spacing:1px">${t}</div>`;
+const av=(u,sz)=>{sz=sz||32;const c=rolC(u.rol);if(u.foto)return`<div style="width:${sz}px;height:${sz}px;border-radius:50%;border:2px solid ${c};flex-shrink:0;overflow:hidden;background:#070b14"><img src="${u.foto}" style="width:100%;height:100%;object-fit:cover"></div>`;return`<div style="width:${sz}px;height:${sz}px;border-radius:50%;background:${c}22;border:2px solid ${c};display:flex;align-items:center;justify-content:center;font-size:${Math.floor(sz*.32)}px;font-weight:900;color:${c};flex-shrink:0">${u.av||u.n.slice(0,2).toUpperCase()}</div>`;};
+const bar=(v,m,c)=>`<div style="background:${C.brd};border-radius:4px;height:5px;overflow:hidden;margin-top:4px"><div style="width:${Math.min(100,((v||0)/(m||1))*100)}%;height:100%;background:${c||C.acc}"></div></div>`;
+const card=(inner,extra)=>`<div style="background:${C.card};border:1px solid ${C.brd};border-radius:14px;padding:16px;margin-bottom:12px;${extra||""}">${inner}</div>`;
+const sec=(t,c)=>`<div style="font-size:19px;color:${c||C.mut};font-weight:800;margin:14px 0 8px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid ${C.brd};padding-bottom:4px">${t}</div>`;
+const pill=(label,active,onclick,activeC)=>`<button onclick="${onclick}" style="padding:5px 10px;border-radius:20px;border:1px solid ${active?(activeC||C.acc):C.brd};background:${active?(activeC||C.acc)+"22":"transparent"};color:${active?(activeC||C.acc):C.mut};font-size:26px;font-weight:800;margin:2px">${label}</button>`;
+
+// ── HEADER + TABS ─────────────────────────────────────────────────────────
+function renderHeader(){
+  const u=cu();
+  const sd=statusDia(u);
+  return`<div style="background:${C.surf};border-bottom:1px solid ${C.brd};padding:10px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:50">
+    <div><div style="font-size:19px;font-weight:900;color:${C.acc}">SALES REPORT APP</div><div style="font-size:26px;color:${C.mut};font-weight:700;letter-spacing:1px">SECRETS MIRABEL · <span id="syncStatus" style="color:${C.acc}">●</span> SYNC</div></div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="text-align:right"><div style="font-size:19px;color:${rolC(u.rol)};font-weight:800">${u.rol}</div><div style="font-size:21px;color:${stC(sd.status)}">${sd.status}</div></div>
+      ${av(u,28)}
+      <button onclick="cerrarSesion()" style="background:#1a2d4a;border:none;color:#7a90b8;border-radius:14px;padding:5px 8px;font-size:21px;font-weight:800;margin-left:2px;cursor:pointer">Salir</button>
+    </div>
+  </div>`;
+}
+function renderTabs(){
+  const tabs=isRep()?[["r","Ranking"],["m","MVPs"],["l","Linea"],["c","Calendario"],["v","Ventas"],["p","Perfil"]]:[["r","Reporte"],["m","MVPs"],["l","Linea"],["c","Calendario"],["v","Ventas"],["e","Equipo"],["z","Zonas"],["p","Perfil"]];
+  return`<div style="position:fixed;bottom:0;left:0;right:0;background:${C.surf};border-top:1px solid ${C.brd};display:flex;z-index:50">
+    ${tabs.map(([id,lb])=>`<button onclick="go('${id}')" style="flex:1;background:none;border:none;border-top:2px solid ${S.tab===id?C.acc:"transparent"};padding:12px 2px;font-size:21px;font-weight:800;color:${S.tab===id?C.acc:C.mut};text-transform:uppercase">${lb}</button>`).join("")}
+  </div>`;
+}
+
+// ── REPORTE ───────────────────────────────────────────────────────────────
+// Helper global para filas de ranking (usado en Reporte y Ranking Reps)
+function rankRow(u,i,mv,col){
+  return`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:${i<3?"6px 8px":"2px 0"};background:${i===0?C.gold+"11":"transparent"};border-radius:14px">
+    <span style="font-weight:900;color:${i===0?C.gold:C.mut};width:22px;font-size:${i<3?14:11}px">#${i+1}</span>
+    ${av(u,i<3?32:24)}
+    <div style="flex:1"><div style="font-size:${i<3?13:11}px;font-weight:800">${u.n}</div><div style="font-size:21px;color:${posC(u.posicion)}">${u.posicion}${u.vtas?" · "+u.vtas+"v":""}</div>${bar(u.vol,mv,i===0?C.gold:col)}</div>
+    <div style="font-size:${i<3?13:11}px;font-weight:900;color:${i===0?C.gold:col}">${FMTK(u.vol)}</div>
+  </div>`;
+}
+
+function renderReporte(){
+  const anios=[];for(let y=2025;y<=hoy.getFullYear();y++)anios.push(y);
+  const arr=S.vista==="mes"?filtMes(ventas,S.selMo,S.selYr):filtAnio(ventas,S.selYr);
+  const sales=arr.filter(v=>v.tipo!=="Cancelacion"&&!v.cancelado);
+  const cxls=arr.filter(v=>v.tipo==="Cancelacion");
+  const ag=sales.filter(v=>v.tipo==="Agencia"),so=sales.filter(v=>v.tipo==="Socio/Upgrade");
+  const choices=ag.filter(v=>v.mem==="Choices");
+  const vAg=ag.reduce((a,v)=>a+v.vol,0),vSo=so.reduce((a,v)=>a+v.vol,0),vCxl=cxls.reduce((a,v)=>a+v.vol,0);
+  const vChoices=choices.reduce((a,v)=>a+v.vol,0);
+  const vAgSinChoices=vAg-vChoices;
+  const vN=vAg+vSo-vCxl;
+  const qs=sales.reduce((a,v)=>a+(v.qs||0),0),cts=sales.reduce((a,v)=>a+(v.cts||0),0);
+  const qsSo=so.length; // Q's de socios = cantidad de socios cerrados
+  const prem=sales.reduce((a,v)=>a+(v.premiere||0),0),tq=sales.reduce((a,v)=>a+(v.turquia||0),0),fb=sales.reduce((a,v)=>a+(v.flybacks||0),0);
+  const pctAg=qs>0?(cts/qs*100):0,pctTot=qs>0?((cts+so.length)/qs*100):0;
+  // VPG Agencias = Vol Agencias / Q's totales
+  const vpgAg=qs>0?Math.round(vAg/qs):0;
+  // VPG Socios = Vol Socios / Q's Socios (cantidad de socios)
+  const vpgSo=qsSo>0?Math.round(vSo/qsSo):0;
+  const bp=Math.min(100,vN/BUDGET*100);
+  const diasM=new Date(S.selYr,S.selMo+1,0).getDate(),diasR=Math.max(1,diasM-hoy.getDate()+1);
+  const falt=Math.max(0,BUDGET-vN);
+  if(!S.dRep)S.dRep=initDRep();
+  const dr=S.dRep;
+  const td=todayStr();
+  const vDia=filtDia(ventas,td).filter(v=>!v.cancelado&&v.tipo!=="Cancelacion");
+  const cxlDia=filtDia(ventas,td).filter(v=>v.tipo==="Cancelacion");
+  const vmMes=filtMes(ventas,hoy.getMonth(),hoy.getFullYear());
+  const volMTD=vmMes.filter(v=>!v.cancelado&&v.tipo!=="Cancelacion").reduce((a,v)=>a+v.vol,0)-vmMes.filter(v=>v.tipo==="Cancelacion").reduce((a,v)=>a+v.vol,0);
+  const faltMTD=Math.max(0,BUDGET-volMTD);
+  return`<div style="padding:16px">
+    <div style="font-size:26px;font-weight:900;margin-bottom:12px">Reporte</div>
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <button onclick="setVista('mes')" style="flex:1;background:${S.vista==="mes"?C.acc:C.surf};color:${S.vista==="mes"?"#071020":C.mut};border:1px solid ${S.vista==="mes"?C.acc:C.brd};border-radius:14px;padding:8px;font-weight:800;font-size:21px">Por Mes</button>
+      <button onclick="setVista('anio')" style="flex:1;background:${S.vista==="anio"?C.acc:C.surf};color:${S.vista==="anio"?"#071020":C.mut};border:1px solid ${S.vista==="anio"?C.acc:C.brd};border-radius:14px;padding:8px;font-weight:800;font-size:21px">Por Año</button>
+    </div>
+    ${S.vista==="mes"?`
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">${anios.map(y=>`<button onclick="setYr(${y})" style="background:${S.selYr===y?C.gold:C.surf};color:${S.selYr===y?"#071020":C.mut};border:1px solid ${S.selYr===y?C.gold:C.brd};border-radius:20px;padding:3px 12px;font-size:26px;font-weight:800">${y}</button>`).join("")}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px">${MESES_C.map((m,i)=>`<button onclick="setMo(${i})" style="background:${S.selMo===i?C.acc:C.surf};color:${S.selMo===i?"#071020":C.mut};border:1px solid ${S.selMo===i?C.acc:C.brd};border-radius:14px;padding:7px 2px;font-size:19px;font-weight:800">${m}</button>`).join("")}</div>`
+    :`<div style="display:flex;gap:6px;margin-bottom:10px">${anios.map(y=>`<button onclick="setYr(${y})" style="flex:1;background:${S.selYr===y?C.gold:C.surf};color:${S.selYr===y?"#071020":C.mut};border:1px solid ${S.selYr===y?C.gold:C.brd};border-radius:14px;padding:12px;font-size:19px;font-weight:800">${y}</button>`).join("")}</div>`}
+    <div style="font-size:26px;color:${C.mut};font-weight:800;margin-bottom:10px;letter-spacing:1px">${S.vista==="mes"?MESES[S.selMo].toUpperCase()+" "+S.selYr:"AÑO "+S.selYr}</div>
+    ${S.vista==="mes"?card(`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:19px;color:${C.mut};font-weight:800">NETO vs BUDGET</span>
+        <span style="font-size:21px;color:${C.gold};font-weight:900">${bp.toFixed(1)}%</span>
+      </div>
+      <div style="font-size:26px;font-weight:900;color:${C.acc}">${FMT(vN)}</div>
+      <div style="background:${C.brd};border-radius:6px;height:8px;margin:8px 0;overflow:hidden"><div style="width:${bp}%;height:100%;background:${C.acc}"></div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+        ${[["Budget",FMT(BUDGET),C.mut],["Faltante",FMT(falt),C.red],["Falt/Dia",FMT(falt/diasR),C.gold]].map(([l,v,c])=>`<div style="text-align:center"><div style="font-size:26px;font-weight:900;color:${c}">${v}</div><div style="font-size:26px;color:${C.mut}">${l}</div></div>`).join("")}
+      </div>
+      ${isMgr()?`
+        <div style="border-top:1px solid ${C.brd};padding-top:10px">
+          <div style="font-size:21px;color:${C.mut};font-weight:800;margin-bottom:8px">EDITAR BUDGET MENSUAL</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="budgetInput" type="number" value="${BUDGET}" placeholder="1500000" style="flex:1;margin-bottom:0;font-size:26px;font-weight:900;color:${C.gold}">
+            <button onclick="actualizarBudget()" style="background:${C.gold};color:#071020;border:none;border-radius:14px;padding:12px 14px;font-size:21px;font-weight:800;flex-shrink:0">Guardar</button>
+          </div>
+        </div>
+      `:""}
+    `):""}
+
+    ${card(`
+      <div style="font-size:19px;color:${C.mut};font-weight:800;margin-bottom:10px">AGENCIAS vs SOCIOS</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+        <div><div style="font-size:19px;font-weight:900;color:${C.acc}">${FMT(vAg)}</div><div style="font-size:26px;color:${C.mut}">AGENCIAS (${ag.length})</div>${bar(vAg,vAg+vSo||1,C.acc)}</div>
+        <div><div style="font-size:19px;font-weight:900;color:${C.pur}">${FMT(vSo)}</div><div style="font-size:26px;color:${C.mut}">SOCIOS (${so.length})</div>${bar(vSo,vAg+vSo||1,C.pur)}</div>
+      </div>
+      <div style="border-top:1px solid ${C.brd};padding-top:8px">
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span style="font-size:19px;color:${C.mut}">Vol Agencias sin Choices</span>
+          <span style="font-size:26px;font-weight:900;color:${C.acc}">${FMT(vAgSinChoices)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span style="font-size:19px;color:${C.mut}">Vol Choices</span>
+          <span style="font-size:26px;font-weight:900;color:${C.blue}">${FMT(vChoices)} (${choices.length}v)</span>
+        </div>
+        ${vCxl>0?`<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="font-size:19px;color:${C.mut}">Cancelaciones</span><span style="font-size:26px;font-weight:900;color:${C.red}">${FMT(vCxl)}</span></div>`:""}
+      </div>
+    `)}
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
+      ${[[sales.length,C.acc,"Ventas"],[cxls.length,C.red,"Canceladas"],[qs,C.blue,"Q's"],[cts,C.gold,"CTS"],[prem,C.pur,"Prem.Sem"],[tq,C.blue,"Turquia"],[fb,C.ora,"Flybacks"]].map(([v,c,l])=>`<div style="background:${C.card};border:1px solid ${C.brd};border-radius:14px;padding:10px 6px;text-align:center"><div style="font-size:19px;font-weight:900;color:${c}">${v}</div><div style="font-size:19px;color:${C.mut}">${l}</div></div>`).join("")}
+    </div>
+
+    ${card(`
+      <div style="font-size:19px;color:${C.mut};font-weight:800;margin-bottom:10px">VPG</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div style="background:${C.surf};border-radius:14px;padding:10px;text-align:center">
+          <div style="font-size:21px;color:${C.acc};font-weight:800;margin-bottom:4px">VPG AGENCIAS</div>
+          <div style="font-size:26px;font-weight:900;color:${C.acc}">${FMTK(vpgAg)}</div>
+          <div style="font-size:26px;color:${C.mut};margin-top:2px">Vol Ag / Q's (${qs})</div>
+        </div>
+        <div style="background:${C.surf};border-radius:14px;padding:10px;text-align:center">
+          <div style="font-size:21px;color:${C.pur};font-weight:800;margin-bottom:4px">VPG SOCIOS</div>
+          <div style="font-size:26px;font-weight:900;color:${C.pur}">${FMTK(vpgSo)}</div>
+          <div style="font-size:26px;color:${C.mut};margin-top:2px">Vol So / Q's So (${qsSo})</div>
+        </div>
+      </div>
+    `)}
+
+    <div style="background:${C.card};border:1px solid ${C.brd};border-radius:14px;padding:12px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr">
+      <div style="text-align:center;padding-right:12px"><div style="font-size:21px;color:${C.mut};font-weight:800;margin-bottom:4px">% CIERRE AGENCIAS</div><div style="font-size:26px;font-weight:900;color:${C.acc}">${pctAg.toFixed(1)}%</div><div style="font-size:26px;color:${C.mut}">CTS / Q's</div></div>
+      <div style="text-align:center;padding-left:12px;border-left:1px solid ${C.brd}"><div style="font-size:21px;color:${C.mut};font-weight:800;margin-bottom:4px">% CIERRE AG+SOCIOS</div><div style="font-size:26px;font-weight:900;color:${C.pur}">${pctTot.toFixed(1)}%</div><div style="font-size:26px;color:${C.mut}">(CTS+Socios) / Q's</div></div>
+    </div>
+
+    ${isMgr()?renderWASection(dr,vDia,cxlDia,volMTD,faltMTD):""}
+  </div>`;
+}
+
+function initDRep(){
+  const td=todayStr();
+  const vd=filtDia(ventas,td).filter(v=>!v.cancelado&&v.tipo!=="Cancelacion");
+  const qs=vd.reduce((a,v)=>a+(v.qs||0),0),vol=vd.reduce((a,v)=>a+v.vol,0),cts=vd.reduce((a,v)=>a+(v.cts||0),0);
+  const socios=vd.filter(v=>v.tipo==="Socio/Upgrade").length;
+  const ld={};allLocs().forEach(l=>{ld[l]={qs:"",vol:""};});
+  return{fecha:td,qs:String(qs),vol:String(vol),vpg:qs>0?String(Math.round(vol/qs)):"",
+    pctC:qs>0?(cts/qs*100).toFixed(1):"0.0",pctCS:qs>0?((cts+socios)/qs*100).toFixed(1):"0.0",
+    vtasT:String(vd.length),vtasCh:String(vd.filter(v=>v.mem==="Choices").length),
+    cont:String(vd.length),prem:String(vd.reduce((a,v)=>a+(v.premiere||0),0)),
+    tq:String(vd.reduce((a,v)=>a+(v.turquia||0),0)),cert:"",pend:"",notas:"",ld};
+}
+
+function renderWASection(dr,vDia,cxlDia,volMTD,faltMTD){
+  const locsAll=Object.keys(dr.ld||{});
+  return card(`
+    <div style="display:flex;justify-content:space-between;align-items:center;${S.showWA?"margin-bottom:14px":""}">
+      <div><div style="font-size:19px;font-weight:900;color:${C.gold}">Reporte del Dia — WhatsApp</div>${!S.showWA?`<div style="font-size:19px;color:${C.mut}">${todayStr()} · ${vDia.length} ventas hoy</div>`:""}</div>
+      <button onclick="S.showWA=!S.showWA;render()" style="background:${C.gold};color:#071020;border:none;border-radius:14px;padding:6px 14px;font-size:26px;font-weight:800">${S.showWA?"Cerrar":"Preparar"}</button>
+    </div>
+    ${S.showWA?`
+      <div style="background:${C.acc}15;border:1px solid ${C.acc}33;border-radius:14px;padding:8px 12px;margin-bottom:10px;font-size:19px;color:${C.acc}">Campos con borde verde = calculados automaticamente. Puedes editarlos.</div>
+      ${lbl("Fecha")}<input type="date" value="${dr.fecha}" onchange="upDR('fecha',this.value)">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div>${lbl("Q's dia (auto)")}<input type="number" value="${dr.qs}" onchange="upDR('qs',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("Volumen $ (auto)")}<input type="number" value="${dr.vol}" onchange="upDR('vol',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("VPG (auto)")}<input type="number" value="${dr.vpg}" onchange="upDR('vpg',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("% Cierre total (auto)")}<input value="${dr.pctC}" onchange="upDR('pctC',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("% Cierre s/Ch (auto)")}<input value="${dr.pctCS}" onchange="upDR('pctCS',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("# Ventas total (auto)")}<input type="number" value="${dr.vtasT}" onchange="upDR('vtasT',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("# Ventas Choices (auto)")}<input type="number" value="${dr.vtasCh}" onchange="upDR('vtasCh',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("Contratos (auto)")}<input type="number" value="${dr.cont}" onchange="upDR('cont',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("Premiere sem (auto)")}<input type="number" value="${dr.prem}" onchange="upDR('prem',this.value)" style="border-color:${C.acc}66"></div>
+        <div>${lbl("Turquia (auto)")}<input type="number" value="${dr.tq}" onchange="upDR('tq',this.value)" style="border-color:${C.acc}66"></div>
+        <div style="grid-column:span 2">${lbl("Certificados")}<input type="number" value="${dr.cert}" onchange="upDR('cert',this.value)" placeholder="0"></div>
+      </div>
+      <div style="background:${C.surf};border-radius:14px;padding:10px;margin:10px 0">
+        <div style="font-size:19px;color:${C.gold};font-weight:800;margin-bottom:10px">VENTAS DEL DIA (AUTO)</div>
+        ${vDia.length===0?`<div style="font-size:26px;color:${C.mut}">Sin ventas hoy</div>`:vDia.map(v=>`
+          <div style="border-left:3px solid ${v.tipo==="Socio/Upgrade"?C.pur:C.acc};padding-left:8px;margin-bottom:10px">
+            <div style="font-size:19px;font-weight:900;color:${v.tipo==="Socio/Upgrade"?C.pur:C.acc}">${FMT(v.vol)}</div>
+            <div style="font-size:19px;color:${C.txt}">${getName(v.rep_id)} / ${getName(v.cerr_id)} ${tag(v.tipo==="Socio/Upgrade"?"SOCIO":"AGENCIA",v.tipo==="Socio/Upgrade"?C.pur:C.acc)}</div>
+            <div style="font-size:19px;color:${C.mut}">${v.loc} · ${v.mem} · Eng:${v.pctEng}% · Prem:${v.premiere}sem · TQ:${v.turquia}</div>
+          </div>`).join("")}
+        ${cxlDia.length>0?`<div style="font-size:19px;color:${C.red};font-weight:800;margin-top:4px">CXL: ${cxlDia.length} (${FMT(cxlDia.reduce((a,v)=>a+v.vol,0))})</div>`:""}
+      </div>
+      ${lbl("Venta pendiente (no procesable)")}<textarea onchange="upDR('pend',this.value)" style="min-height:44px;resize:vertical">${dr.pend}</textarea>
+      <div style="background:${C.surf};border-radius:14px;padding:10px;margin-bottom:10px">
+        <div style="font-size:19px;color:${C.gold};font-weight:800;margin-bottom:10px">*LOCACION* — Q's Y VOLUMEN</div>
+        <div style="display:grid;grid-template-columns:52px 1fr 1fr;gap:4px;margin-bottom:8px">
+          <span style="font-size:26px;color:${C.mut};font-weight:800">LOC</span><span style="font-size:26px;color:${C.mut};font-weight:800">Q's</span><span style="font-size:26px;color:${C.mut};font-weight:800">VOL $</span>
+        </div>
+        ${Object.entries(zonas).map(([zona,zdata])=>(zdata.hoteles||[]).length===0?"":
+          `<div style="margin-bottom:10px">
+            <div style="font-size:21px;color:${C.pur};font-weight:900;letter-spacing:1px;margin-bottom:4px">${zona.toUpperCase()}</div>
+            ${(zdata.hoteles||[]).map(hotel=>
+              `<div style="font-size:21px;color:${C.gold};font-weight:800;margin-bottom:3px;margin-left:4px">${hotel}</div>
+              ${(zdata.locs[hotel]||[]).map(loc=>
+                `<div style="display:grid;grid-template-columns:52px 1fr 1fr;gap:4px;margin-bottom:4px;align-items:center;margin-left:4px">
+                  <div style="font-size:26px;font-weight:900;color:${C.blue}">${loc}</div>
+                  <input type="number" placeholder="0" value="${(dr.ld[loc]||{}).qs||""}" onchange="upLoc('${loc}','qs',this.value)" style="margin-bottom:0;padding:5px 7px;font-size:26px">
+                  <input type="number" placeholder="0" value="${(dr.ld[loc]||{}).vol||""}" onchange="upLoc('${loc}','vol',this.value)" style="margin-bottom:0;padding:5px 7px;font-size:26px">
+                </div>`).join("")}`).join("")}
+          </div>`
+        ).join("")}
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <input id="nuevaLoc" placeholder="Loc extra (ej: NV1)" style="flex:1;margin-bottom:0">
+          <button onclick="addLoc()" style="background:${C.blue};color:#fff;border:none;border-radius:14px;padding:8px 14px;font-size:21px;font-weight:800">+</button>
+        </div>
+      </div>
+      <div style="background:${C.surf};border-radius:14px;padding:10px;margin-bottom:10px">
+        <div style="font-size:19px;color:${C.gold};font-weight:800;margin-bottom:10px">MONTH TO DATE (AUTO)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+          ${[["Budget",FMT(BUDGET),C.mut],["MTD",FMT(volMTD),C.acc],["Faltante",FMT(faltMTD),C.red]].map(([l,v,c])=>`<div style="text-align:center;background:${C.card};border-radius:14px;padding:10px 6px"><div style="font-size:21px;font-weight:900;color:${c}">${v}</div><div style="font-size:26px;color:${C.mut}">${l}</div></div>`).join("")}
+        </div>
+      </div>
+      ${lbl("Notas")}<input value="${dr.notas}" onchange="upDR('notas',this.value)" placeholder="Notas adicionales...">
+      ${lbl("Numero WhatsApp")}<input id="waNum" value="${S.waNum}" onchange="S.waNum=this.value" placeholder="+52 998 000 0000">
+      <button onclick="sendWA()" style="width:100%;background:#25D366;color:#fff;border:none;border-radius:14px;padding:13px;font-size:26px;font-weight:900;margin-top:4px">Enviar por WhatsApp</button>
+    `:""}
+  `,"border:1px solid "+C.gold+"55");
+}
+
+// ── CALENDARIO ────────────────────────────────────────────────────────────
+function renderCalendario(){
+  const yr=S.calYr,mo=S.calMo;
+  const diasM=new Date(yr,mo+1,0).getDate(),pd=new Date(yr,mo,1).getDay();
+  const keyOf=d=>`${yr}-${PAD(mo+1)}-${PAD(d)}`;
+  const vDia=d=>{const vs=ventas.filter(v=>v.fecha===keyOf(d));return isRep()?vs.filter(v=>v.rep_id===cu().id):vs;};
+  const colDia=d=>{
+  const a=vDia(d).filter(v=>!v.cancelado&&v.tipo!=="Cancelacion");
+  const cx=vDia(d).filter(v=>v.tipo==="Cancelacion");
+  const hasTour=toursData[keyOf(d)]&&toursData[keyOf(d)][cu().id];
+  const sd=statusDia(cu(),keyOf(d));
+  if(a.length&&cx.length)return C.gold;
+  if(cx.length)return C.red;
+  if(a.some(v=>v.tipo==="Socio/Upgrade"))return C.pur;
+  if(a.some(v=>v.tipo==="Agencia"))return C.acc;
+  if(hasTour)return C.blue;
+  if(sd.status!=="Activo")return C.mut;
+  return null;
+};
+  const selV=S.calSel?vDia(S.calSel):[];
+  const anios=[];for(let y=2025;y<=hoy.getFullYear()+1;y++)anios.push(y);
+  return`<div style="padding:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <button onclick="navMo(-1)" style="background:${C.surf};border:1px solid ${C.brd};color:${C.txt};border-radius:14px;padding:6px 16px;font-size:19px">&#8249;</button>
+      <div style="font-size:26px;font-weight:900">${MESES[mo]} ${yr}</div>
+      <button onclick="navMo(1)" style="background:${C.surf};border:1px solid ${C.brd};color:${C.txt};border-radius:14px;padding:6px 16px;font-size:19px">&#8250;</button>
+    </div>
+    <div style="display:flex;gap:4px;justify-content:center;margin-bottom:10px;flex-wrap:wrap">
+      ${anios.map(y=>`<button onclick="S.calYr=${y};S.calSel=null;render()" style="background:${yr===y?C.acc:C.surf};color:${yr===y?"#071020":C.mut};border:1px solid ${yr===y?C.acc:C.brd};border-radius:20px;padding:3px 10px;font-size:26px;font-weight:800">${y}</button>`).join("")}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);margin-bottom:4px">
+      ${["D","L","M","X","J","V","S"].map(d=>`<div style="text-align:center;font-size:19px;color:${C.mut};font-weight:800">${d}</div>`).join("")}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:12px">
+      ${Array(pd).fill("").map(()=>`<div></div>`).join("")}
+      ${Array(diasM).fill("").map((_,i)=>{
+        const d=i+1,c=colDia(d);
+        const isH=d===hoy.getDate()&&mo===hoy.getMonth()&&yr===hoy.getFullYear();
+        const isSel=d===S.calSel;
+        return`<div onclick="S.calSel=S.calSel===${d}?null:${d};render()" style="aspect-ratio:1;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:${isSel?C.acc+"30":c?c+"18":C.surf};border:1.5px solid ${isSel?C.acc:isH?C.gold:c||C.brd}">
+          <span style="font-size:26px;font-weight:${isH?900:500};color:${c||(isH?C.gold:C.txt)}">${d}</span>
+          <div style="display:flex;gap:2px;margin-top:2px;justify-content:center">
+            ${vDia(d).length>0?`<div style="width:4px;height:4px;border-radius:50%;background:${c||C.acc}"></div>`:""}
+            ${(toursData[keyOf(d)]&&toursData[keyOf(d)][cu().id]&&vDia(d).length===0)?`<div style="width:4px;height:4px;border-radius:50%;background:${C.blue}"></div>`:""}
+            ${(statusDia(cu(),keyOf(d)).status!=="Activo"&&vDia(d).length===0)?`<div style="width:4px;height:4px;border-radius:50%;background:${C.mut}"></div>`:""}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>
+    ${S.calSel?card(`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:19px;font-weight:900">${keyOf(S.calSel)}</div>
+        <div style="display:flex;gap:6px">
+          <button onclick="openTourModal('${keyOf(S.calSel)}')" style="background:${C.blue}22;color:${C.blue};border:1px solid ${C.blue}44;border-radius:14px;padding:12px 12px;font-size:19px;font-weight:800">Tour</button>
+          ${isMgr()||cu().rol==="Cerrador"?`<button onclick="openCxl('${keyOf(S.calSel)}')" style="background:${C.red}22;color:${C.red};border:1px solid ${C.red}44;border-radius:14px;padding:12px 12px;font-size:19px;font-weight:800">Cancelacion</button>`:""}
+          <button onclick="openVenta('${keyOf(S.calSel)}')" style="background:${C.acc};color:#071020;border:none;border-radius:14px;padding:6px 10px;font-size:19px;font-weight:800">Venta</button>
+        </div>
+      </div>
+      ${(()=>{
+        const sd=statusDia(cu(),keyOf(S.calSel));
+        const tours=toursData[keyOf(S.calSel)]&&toursData[keyOf(S.calSel)][cu().id];
+        const statusHTML=sd.status!=="Activo"?`<div style="background:${stC(sd.status)}22;border:1px solid ${stC(sd.status)}44;border-radius:14px;padding:10px;margin-bottom:10px;display:flex;align-items:center;gap:8px"><span style="font-size:21px">${sd.status==="Day Off"?"🏖️":sd.status==="Vacaciones"?"✈️":sd.status==="Permiso"?"📋":"🤒"}</span><div><div style="font-size:19px;font-weight:800;color:${stC(sd.status)}">${sd.status}</div>${sd.detalle?`<div style="font-size:19px;color:${C.mut}">${sd.detalle}</div>`:""}</div></div>`:"";
+        const toursHTML=tours?`<div style="background:${C.blue}15;border:1px solid ${C.blue}33;border-radius:14px;padding:10px;margin-bottom:10px"><div style="font-size:19px;color:${C.blue};font-weight:800;margin-bottom:8px">TOURS DEL DIA</div><div style="display:flex;gap:10px">${tours.qs>0?`<div style="text-align:center;background:${C.acc}15;border-radius:14px;padding:8px 16px"><div style="font-size:21px;font-weight:900;color:${C.acc}">${tours.qs}</div><div style="font-size:21px;color:${C.mut}">Q's</div></div>`:""} ${tours.cts>0?`<div style="text-align:center;background:${C.mut}15;border-radius:14px;padding:8px 16px"><div style="font-size:21px;font-weight:900;color:${C.mut}">${tours.cts}</div><div style="font-size:21px;color:${C.mut}">CT's</div></div>`:""}</div></div>`:"";
+        return statusHTML+toursHTML;
+      })()}
+      ${selV.length===0?`<div style="color:${C.mut};font-size:19px">Sin ventas este dia</div>`:selV.map(v=>{
+        const c=v.tipo==="Cancelacion"?C.red:v.cancelado?C.mut:v.tipo==="Socio/Upgrade"?C.pur:C.acc;
+        return`<div style="border-left:3px solid ${c};padding-left:10px;margin-bottom:10px;opacity:${v.cancelado?0.5:1}">
+          ${tag(v.cancelado?"CANCELADA":v.tipo,c)}${tag(v.mem,C.blue)}${tag(v.loc,C.mut)}
+          <div style="font-size:21px;font-weight:900;color:${c};margin-top:4px">${FMT(v.vol)}</div>
+          <div style="font-size:26px;color:${C.mut};margin-top:2px">${v.cliente} — ${getName(v.rep_id)}</div>
+          ${v.eng>0?`<div style="font-size:26px;color:${C.gold}">Eng: ${FMT(v.eng)} (${v.pctEng}%)</div>`:""}
+          ${v.premiere>0?`<div style="font-size:19px;color:${C.pur}">Prem: ${v.premiere}sem · TQ: ${v.turquia} · FB: ${v.flybacks}</div>`:""}
+        </div>`;}).join("")}`):""}
+  </div>`;
+}
+
+// ── VENTAS ────────────────────────────────────────────────────────────────
+function renderVentas(){
+  const lista=isRep()?ventas.filter(v=>v.rep_id===cu().id):ventas;
+  return`<div style="padding:16px">
+    <div style="font-size:26px;font-weight:900;margin-bottom:12px">${isRep()?"Mis Ventas":"Todas las Ventas"}</div>
+    ${[...lista].sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(v=>{
+      const c=v.tipo==="Cancelacion"?C.red:v.cancelado?C.mut:v.tipo==="Socio/Upgrade"?C.pur:C.acc;
+      return`<div style="background:${C.card};border:1px solid ${C.brd};border-left:3px solid ${c};border-radius:14px;padding:12px 14px;margin-bottom:10px;opacity:${v.cancelado?0.55:1}">
+        ${tag(v.cancelado?"CANCELADA":v.tipo,c)}${tag(v.mem,C.blue)}${tag(v.loc,C.mut)}${v.contrato?tag(v.contrato,C.mut):""}
+        <div style="font-size:26px;font-weight:900;color:${c};margin-top:4px">${FMT(v.vol)}</div>
+        <div style="font-size:26px;color:${C.mut};margin-top:3px">${v.fecha} — ${v.cliente}</div>
+        ${!isRep()?`<div style="font-size:26px;color:${C.mut}">Rep: ${getName(v.rep_id)} | Cerr: ${getName(v.cerr_id)}</div>`:""}
+        ${v.eng>0?`<div style="font-size:26px;color:${C.gold}">Eng: ${FMT(v.eng)} (${v.pctEng}%)</div>`:""}
+        ${v.premiere>0||v.turquia>0?`<div style="font-size:19px;color:${C.pur}">Prem: ${v.premiere}sem · TQ: ${v.turquia} · FB: ${v.flybacks}</div>`:""}
+      </div>`;}).join("")}
+    ${lista.length===0?`<div style="color:${C.mut};text-align:center;padding:30px">Sin ventas</div>`:""}
+  </div>`;
+}
+
+// ── EQUIPO ────────────────────────────────────────────────────────────────
+function renderEquipo(){
+  const mo=hoy.getMonth(),yr=hoy.getFullYear();
+  const vm=filtMes(ventas,mo,yr),va=filtAnio(ventas,yr);
+  const et=S.eqTab||"r",campo=et==="r"?"rep_id":"cerr_id";
+  const au=users.filter(u=>u.activo);
+  const reps=au.filter(u=>u.rol==="Vendedor"),cerrs=au.filter(u=>u.rol==="Cerrador"||u.rol==="Manager-Cerrador");
+  const lista=(et==="r"?reps:cerrs).map(u=>({...u,volM:volNetoU(vm,u.id,campo),volA:volNetoU(va,u.id,campo),vtasM:vm.filter(v=>v[campo]===u.id&&!v.cancelado&&v.tipo!=="Cancelacion").length})).sort((a,b)=>b.volM-a.volM);
+  return`<div style="padding:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:26px;font-weight:900">Equipo</div>
+      ${isMgr()?`<button onclick="S.showAdd=!S.showAdd;render()" style="background:${C.acc};color:#071020;border:none;border-radius:14px;padding:7px 12px;font-size:21px;font-weight:800">+ Agregar</button>`:""}
+    </div>
+    ${S.showAdd&&isMgr()?renderFormNuevo():""}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+      <button onclick="S.eqTab='r';render()" style="background:${et==="r"?C.acc:C.surf};color:${et==="r"?"#071020":C.mut};border:1px solid ${et==="r"?C.acc:C.brd};border-radius:14px;padding:12px;font-size:21px;font-weight:800">Reps (${reps.length})</button>
+      <button onclick="S.eqTab='c';render()" style="background:${et==="c"?C.acc:C.surf};color:${et==="c"?"#071020":C.mut};border:1px solid ${et==="c"?C.acc:C.brd};border-radius:14px;padding:12px;font-size:21px;font-weight:800">Cerradores (${cerrs.length})</button>
+    </div>
+    ${lista.map((u,i)=>{
+      const sd=statusDia(u);
+      return card(`
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <span style="font-weight:900;color:${i===0?C.gold:C.mut};width:22px">#${i+1}</span>
+          ${av(u,38)}
+          <div style="flex:1">
+            <div style="font-size:19px;font-weight:800">${u.n}</div>
+            <div style="display:flex;align-items:center;gap:4px;margin-top:2px;flex-wrap:wrap">
+              <span style="font-size:21px;color:${posC(u.posicion)};font-weight:800">${u.posicion}</span>
+              <span style="font-size:21px;color:${stC(sd.status)};font-weight:800">· ${sd.status}${sd.detalle?" ("+sd.detalle+")":""}</span>
+              ${u.hotel?`<span style="font-size:21px;color:${C.blue};font-weight:700">· ${u.hotel}</span>`:""}
+            </div>
+            ${bar(u.volM,lista[0]?.volM||1,i===0?C.gold:et==="r"?C.acc:C.pur)}
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:19px;font-weight:900;color:${i===0?C.gold:et==="r"?C.acc:C.pur}">${FMTK(u.volM)}</div>
+            <div style="font-size:21px;color:${C.mut}">Anual: ${FMTK(u.volA)}</div>
+          </div>
+        </div>
+        <button onclick="abrirDetalle(${u.id})" style="width:100%;background:${C.surf};color:${C.mut};border:1px solid ${C.brd};border-radius:14px;padding:7px;font-size:26px;font-weight:800">Ver detalle / Editar</button>
+      `,"border:1px solid "+(i===0?C.gold+"55":C.brd));
+    }).join("")}
+  </div>`;
+}
+
+function renderFormNuevo(){
+  const rol=S.nuRol||"Vendedor";
+  const pos=S.nuPos||"Liner";
+  return card(`
+    <div style="font-size:19px;font-weight:900;margin-bottom:12px">Nuevo Miembro</div>
+    ${lbl("Nombre completo")}<input id="nu_n" placeholder="Nombre y apellido" style="margin-bottom:10px">
+    ${lbl("Rol")}
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <button onclick="S.nuRol='Vendedor';S.nuPos='Liner';render()" style="flex:1;background:${rol==='Vendedor'?rolC('Vendedor'):C.surf};color:${rol==='Vendedor'?'#071020':C.mut};border:1px solid ${rol==='Vendedor'?rolC('Vendedor'):C.brd};border-radius:14px;padding:8px 2px;font-size:19px;font-weight:800">Vendedor</button>
+      <button onclick="S.nuRol='Cerrador';S.nuPos='Cerrador';render()" style="flex:1;background:${rol==='Cerrador'?rolC('Cerrador'):C.surf};color:${rol==='Cerrador'?'#071020':C.mut};border:1px solid ${rol==='Cerrador'?rolC('Cerrador'):C.brd};border-radius:14px;padding:8px 2px;font-size:19px;font-weight:800">Cerrador</button>
+      <button onclick="S.nuRol='Manager-Cerrador';S.nuPos='Manager-Cerrador';render()" style="flex:1;background:${rol==='Manager-Cerrador'?rolC('Manager-Cerrador'):C.surf};color:${rol==='Manager-Cerrador'?'#071020':C.mut};border:1px solid ${rol==='Manager-Cerrador'?rolC('Manager-Cerrador'):C.brd};border-radius:14px;padding:8px 2px;font-size:21px;font-weight:800">Mgr-Cerrador</button>
+    </div>
+    ${rol==="Vendedor"?`
+      ${lbl("Posicion")}
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <button onclick="S.nuPos='Liner';render()" style="flex:1;background:${pos==='Liner'?posC('Liner'):C.surf};color:${pos==='Liner'?'#071020':C.mut};border:1px solid ${pos==='Liner'?posC('Liner'):C.brd};border-radius:14px;padding:10px 6px;font-size:21px;font-weight:800">Liner</button>
+        <button onclick="S.nuPos='FTM';render()" style="flex:1;background:${pos==='FTM'?posC('FTM'):C.surf};color:${pos==='FTM'?'#071020':C.mut};border:1px solid ${pos==='FTM'?posC('FTM'):C.brd};border-radius:14px;padding:10px 6px;font-size:21px;font-weight:800">FTM</button>
+        <button onclick="S.nuPos='FTB';render()" style="flex:1;background:${pos==='FTB'?posC('FTB'):C.surf};color:${pos==='FTB'?'#071020':C.mut};border:1px solid ${pos==='FTB'?posC('FTB'):C.brd};border-radius:14px;padding:10px 6px;font-size:21px;font-weight:800">FTB</button>
+      </div>`:""}
+    <div style="background:${C.blue}15;border:1px solid ${C.blue}33;border-radius:14px;padding:12px;margin-bottom:10px">
+      ${lbl("Zona")}
+      <select id="nu_zona" onchange="S.nuZona=this.value;S.nuHotel='';render()" style="margin-bottom:10px">
+        <option value="">-- Sin asignar --</option>
+        ${Object.entries(zonas).map(([z,zd])=>`<option value="${z}" ${S.nuZona===z?"selected":""}>${z}</option>`).join("")}
+      </select>
+      ${S.nuZona&&zonas[S.nuZona]?`
+        ${lbl("Hotel")}
+        <select id="nu_hotel" onchange="S.nuHotel=this.value;render()" style="margin-bottom:0">
+          <option value="">-- Sin asignar --</option>
+          ${(zonas[S.nuZona].hoteles||[]).map(h=>`<option value="${h}" ${S.nuHotel===h?"selected":""}>${h}</option>`).join("")}
+        </select>
+      `:""}
+    </div>
+    ${rol!=="Vendedor"?`
+      <div style="background:${C.gold}15;border:1px solid ${C.gold}44;border-radius:14px;padding:12px;margin-bottom:10px">
+        ${lbl("PIN de acceso (4 digitos numericos)")}
+        <input id="nu_pin" type="number" placeholder="Ejemplo: 1234" maxlength="4" style="letter-spacing:6px;font-size:21px;text-align:center;margin-bottom:0">
+        <div style="font-size:19px;color:${C.mut};margin-top:4px">Este PIN lo usara para iniciar sesion en la app.</div>
+      </div>
+    `:""}
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button onclick="S.showAdd=false;render()" style="flex:1;background:${C.surf};color:${C.mut};border:1px solid ${C.brd};border-radius:14px;padding:12px;font-size:19px;font-weight:800">Cancelar</button>
+      <button onclick="guardarNuevo()" style="flex:2;background:${C.acc};color:#071020;border:none;border-radius:14px;padding:12px;font-size:19px;font-weight:900">Guardar</button>
+    </div>
+  `,"border:1px solid "+C.gold+"55;margin-bottom:14px");
+}
+
+// ── DETALLE USUARIO ───────────────────────────────────────────────────────
+function renderDetalle(){
+  const u=users.find(u=>u.id===S.detalleId);
+  if(!u)return"";
+  const mo=hoy.getMonth(),yr=hoy.getFullYear();
+  const vm=filtMes(ventas,mo,yr);
+  const campo=u.rol==="Vendedor"?"rep_id":"cerr_id";
+  const volM=volNetoU(vm,u.id,campo);
+  const vtasM=vm.filter(v=>v[campo]===u.id&&!v.cancelado&&v.tipo!=="Cancelacion").length;
+  const sd=statusDia(u);
+  const dt=S.detTab||"stats";
+
+  // Contar permisos del mes actual por tipo
+  const permMes=(u.permisos||[]).filter(p=>{const d=new Date(p.fecha+"T12:00:00");return d.getMonth()===mo&&d.getFullYear()===yr;});
+  const faltas=permMes.filter(p=>p.tipo==="Falta").length;
+  const permisos=permMes.filter(p=>p.tipo==="Permiso").length;
+  const castigos=permMes.filter(p=>p.tipo==="Castigo/Promo").reduce((a,p)=>a+(p.castigos||0),0);
+
+  return`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      ${av(u,52)}
+      <div style="flex:1">
+        <div style="font-size:26px;font-weight:900">${u.n}</div>
+        <div style="margin-top:4px">${tag(u.rol,rolC(u.rol))}${tag(u.posicion,posC(u.posicion))}${u.zona?tag(u.zona,C.pur):""}${u.hotel?tag(u.hotel,C.blue):""}</div>
+        <div style="margin-top:4px">${tag(sd.status,stC(sd.status))}</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">
+      ${[["Vol Mes",FMTK(volM),C.acc],["Ventas",vtasM,C.txt],["Faltas",faltas,C.red],["Castigos",castigos,C.ora]].map(([l,v,c])=>`<div style="background:${C.card};border-radius:14px;padding:10px 6px;text-align:center"><div style="font-size:19px;font-weight:900;color:${c}">${v}</div><div style="font-size:26px;color:${C.mut}">${l} ${l==="Faltas"||l==="Castigos"?"(mes)":""}</div></div>`).join("")}
+    </div>
+    <!-- TABS del detalle -->
+    <div style="display:flex;gap:4px;margin-bottom:12px;overflow-x:auto">
+      ${[["info","Datos"],["stats","Estadisticas"],["dayoff","Day Off"],["vac","Vacaciones"],["perm","Permisos/Faltas"],["zona","Zona"],["pos","Posicion"]].map(([id,lb])=>`<button onclick="S.detTab='${id}';render()" style="padding:6px 10px;border-radius:20px;border:1px solid ${dt===id?C.acc:C.brd};background:${dt===id?C.acc+"22":"transparent"};color:${dt===id?C.acc:C.mut};font-size:19px;font-weight:800;white-space:nowrap">${lb}</button>`).join("")}
+    </div>
+
+    ${dt==="info"?`
+      <div style="background:${C.surf};border-radius:14px;overflow:hidden;margin-bottom:14px">
+        <div style="position:relative;height:110px;background:linear-gradient(135deg,${C.acc}22,${C.pur}22);display:flex;align-items:center;justify-content:center">
+          ${u.foto
+            ?`<div style="position:relative"><img src="${u.foto}" style="width:80px;height:80px;border-radius:50%;border:3px solid ${rolC(u.rol)};object-fit:cover"><label for="fotoInput_${u.id}" style="position:absolute;bottom:0;right:0;background:${C.acc};border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:19px">&#9998;</label></div>`
+            :`<label for="fotoInput_${u.id}" style="width:80px;height:80px;border-radius:50%;border:3px dashed ${rolC(u.rol)};display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:${rolC(u.rol)}11">
+                <span style="font-size:26px">&#128247;</span>
+                <span style="font-size:21px;color:${C.mut};margin-top:2px">Subir foto</span>
+              </label>`}
+          <input type="file" id="fotoInput_${u.id}" accept="image/*" style="display:none" onchange="subirFoto(${u.id},this)">
+        </div>
+      </div>
+      ${isMgr()?`
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px">
+          <div>${lbl("Nombre")}<input id="inf_nom" value="${u.nombre||''}" placeholder="Nombre" onchange="upInfo(${u.id},'nombre',this.value)"></div>
+          <div>${lbl("Apellido")}<input id="inf_ape" value="${u.apellido||''}" placeholder="Apellido" onchange="upInfo(${u.id},'apellido',this.value)"></div>
+          <div>${lbl("Fecha de nacimiento")}<input id="inf_nac" type="date" value="${u.nacimiento||''}" onchange="upInfo(${u.id},'nacimiento',this.value)"></div>
+          <div>${lbl("Celular")}<input id="inf_cel" type="tel" value="${u.cel||''}" placeholder="+52 000 000 0000" onchange="upInfo(${u.id},'cel',this.value)"></div>
+          <div style="grid-column:span 2">${lbl("Correo electronico")}<input id="inf_email" type="email" value="${u.email||''}" placeholder="correo@email.com" onchange="upInfo(${u.id},'email',this.value)"></div>
+          <div style="grid-column:span 2">${lbl("Posicion en la empresa")}<input value="${u.posicion}" disabled style="opacity:0.5"></div>
+        </div>
+        <div style="background:${C.acc}15;border:1px solid ${C.acc}33;border-radius:14px;padding:8px 12px;font-size:19px;color:${C.acc};margin-top:4px">Los cambios se guardan automaticamente al escribir.</div>
+      `:`
+        <div style="background:${C.surf};border-radius:14px;padding:16px;margin-bottom:10px">
+          ${u.foto?"":`<div style="text-align:center;margin-bottom:14px"><label for="fotoInput_${u.id}" style="display:inline-flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer"><span style="font-size:32px">&#128247;</span><span style="font-size:26px;color:${C.acc};font-weight:800">Subir mi foto</span></label><input type="file" id="fotoInput_${u.id}" accept="image/*" style="display:none" onchange="subirFoto(${u.id},this)"></div>`}
+          ${[[u.nombre||"--","Nombre"],[u.apellido||"--","Apellido"],[u.nacimiento||"--","Nacimiento"],[u.cel||"--","Celular"],[u.email||"--","Email"],[u.posicion,"Posicion"]].map(([v,l])=>`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid ${C.brd}"><span style="font-size:26px;color:${C.mut};font-weight:800">${l}</span><span style="font-size:21px;font-weight:700">${v}</span></div>`).join("")}
+        </div>
+      `}
+    `:""}
+
+    ${dt==="stats"?`
+      <div style="font-size:19px;color:${C.mut};font-weight:800;margin-bottom:10px">VENTAS DEL MES</div>
+      ${isMgr()?`<div style="display:flex;gap:8px;margin-bottom:10px">
+        <button onclick="openVentaU(${u.id})" style="flex:1;background:${C.acc};color:#071020;border:none;border-radius:14px;padding:8px;font-size:26px;font-weight:800">+ Venta</button>
+        <button onclick="openCxlDet()" style="flex:1;background:${C.red}22;color:${C.red};border:1px solid ${C.red}44;border-radius:14px;padding:8px;font-size:26px;font-weight:800">Cancelar venta</button>
+      </div>`:""}
+      ${(()=>{
+        // Tours del mes para este usuario
+        const mesStr=String(hoy.getFullYear())+"-"+String(hoy.getMonth()+1).padStart(2,"0");
+        let qsTotMes=0,ctsTotMes=0,qsTotAnio=0,ctsTotAnio=0;
+        const anioStr=String(hoy.getFullYear());
+        Object.entries(toursData).forEach(([fecha,uData])=>{
+          const d=uData[u.id];if(!d)return;
+          if(fecha.startsWith(mesStr)){qsTotMes+=d.qs||0;ctsTotMes+=d.cts||0;}
+          if(fecha.startsWith(anioStr)){qsTotAnio+=d.qs||0;ctsTotAnio+=d.cts||0;}
+        });
+        // Ventas del mes/año para calculo de cierre
+        const vtasMes=vm.filter(v=>v[campo]===u.id&&!v.cancelado&&v.tipo!=="Cancelacion").length;
+        const vtasAnio=filtAnio(ventas,hoy.getFullYear()).filter(v=>v[campo]===u.id&&!v.cancelado&&v.tipo!=="Cancelacion").length;
+        const pctMes=qsTotMes>0?((vtasMes/qsTotMes)*100).toFixed(1):"0.0";
+        const pctAnio=qsTotAnio>0?((vtasAnio/qsTotAnio)*100).toFixed(1):"0.0";
+        return qsTotMes+ctsTotMes+qsTotAnio+ctsTotAnio>0?`
+          <div style="background:${C.blue}15;border:1px solid ${C.blue}33;border-radius:14px;padding:12px;margin-bottom:10px">
+            <div style="font-size:19px;color:${C.blue};font-weight:800;margin-bottom:10px">RECORD DE TOURS</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div style="background:${C.surf};border-radius:14px;padding:10px;text-align:center">
+                <div style="font-size:21px;color:${C.mut};font-weight:800;margin-bottom:8px">MES ACTUAL</div>
+                <div style="display:flex;justify-content:center;gap:10px">
+                  <div><div style="font-size:19px;font-weight:900;color:${C.acc}">${qsTotMes}</div><div style="font-size:26px;color:${C.mut}">Q's</div></div>
+                  <div><div style="font-size:19px;font-weight:900;color:${C.mut}">${ctsTotMes}</div><div style="font-size:26px;color:${C.mut}">CT's</div></div>
+                  <div><div style="font-size:19px;font-weight:900;color:${C.gold}">${pctMes}%</div><div style="font-size:26px;color:${C.mut}">Cierre</div></div>
+                </div>
+              </div>
+              <div style="background:${C.surf};border-radius:14px;padding:10px;text-align:center">
+                <div style="font-size:21px;color:${C.mut};font-weight:800;margin-bottom:8px">AÑO</div>
+                <div style="display:flex;justify-content:center;gap:10px">
+                  <div><div style="font-size:19px;font-weight:900;color:${C.acc}">${qsTotAnio}</div><div style="font-size:26px;color:${C.mut}">Q's</div></div>
+                  <div><div style="font-size:19px;font-weight:900;color:${C.mut}">${ctsTotAnio}</div><div style="font-size:26px;color:${C.mut}">CT's</div></div>
+                  <div><div style="font-size:19px;font-weight:900;color:${C.gold}">${pctAnio}%</div><div style="font-size:26px;color:${C.mut}">Cierre</div></div>
+                </div>
+              </div>
+            </div>
+          </div>`:"";
+      })()}
+      ${vm.filter(v=>v[campo]===u.id).length===0?`<div style="color:${C.mut};font-size:21px">Sin ventas este mes</div>`:vm.filter(v=>v[campo]===u.id).sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(v=>{const c=v.tipo==="Cancelacion"?C.red:v.cancelado?C.mut:v.tipo==="Socio/Upgrade"?C.pur:C.acc;return`<div style="border-left:3px solid ${c};padding-left:10px;margin-bottom:10px;opacity:${v.cancelado?0.5:1}">${tag(v.cancelado?"CANCELADA":v.tipo,c)}${tag(v.mem,C.blue)}<div style="font-size:21px;font-weight:900;color:${c};margin-top:3px">${FMT(v.vol)}</div><div style="font-size:19px;color:${C.mut}">${v.fecha} — ${v.cliente}</div></div>`;}).join("")}
+    `:""}
+
+    ${dt==="dayoff"?`
+      <div style="font-size:21px;color:${C.txt};margin-bottom:10px">Selecciona los dias de descanso semanales de ${u.n.split(" ")[0]}. En esos dias no se contara en la linea del dia.</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:16px">
+        ${DIAS_SEM.map((d,i)=>`<button onclick="toggleDayOff(${u.id},${i})" style="padding:10px 4px;border-radius:14px;border:2px solid ${(u.dayOff||[]).includes(i)?C.pur:C.brd};background:${(u.dayOff||[]).includes(i)?C.pur+"22":C.surf};color:${(u.dayOff||[]).includes(i)?C.pur:C.mut};font-size:26px;font-weight:800;text-align:center">${d}${(u.dayOff||[]).includes(i)?'<br><span style="font-size:26px">Descanso</span>':''}</button>`).join("")}
+      </div>
+      <div style="background:${C.surf};border-radius:14px;padding:10px;font-size:26px;color:${C.mut}">
+        Dias de descanso: <strong style="color:${C.pur}">${(u.dayOff||[]).length===0?"Ninguno":(u.dayOff||[]).map(i=>DIAS_SEM[i]).join(", ")}</strong>
+      </div>
+    `:""}
+
+    ${dt==="vac"?`
+      <div style="font-size:21px;color:${C.txt};margin-bottom:10px">Registra periodos de vacaciones. En esas fechas ${u.n.split(" ")[0]} no aparecera en la linea del dia.</div>
+      ${isMgr()?card(`
+        <div style="font-size:21px;font-weight:800;margin-bottom:10px;color:${C.acc}">+ Nueva Vacacion</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div>${lbl("Desde")}<input type="date" id="vac_desde" value="${S.vacDesde}" onchange="S.vacDesde=this.value"></div>
+          <div>${lbl("Hasta")}<input type="date" id="vac_hasta" value="${S.vacHasta}" onchange="S.vacHasta=this.value"></div>
+          <div style="grid-column:span 2">${lbl("Nota")}<input id="vac_nota" value="${S.vacNota}" onchange="S.vacNota=this.value" placeholder="Ej: Vacaciones anuales"></div>
+        </div>
+        <button onclick="agregarVacacion(${u.id})" style="width:100%;background:${C.blue};color:#fff;border:none;border-radius:14px;padding:12px;font-weight:800;font-size:21px">Agregar</button>
+      `):""}
+      ${(u.vacaciones||[]).length===0?`<div style="color:${C.mut};font-size:21px">Sin vacaciones registradas</div>`:""}
+      ${(u.vacaciones||[]).map((v,i)=>`<div style="background:${C.surf};border-radius:14px;padding:10px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:21px;font-weight:800;color:${C.blue}">${v.desde} al ${v.hasta}</div>
+          ${v.nota?`<div style="font-size:26px;color:${C.mut}">${v.nota}</div>`:""}
+        </div>
+        ${isMgr()?`<button onclick="quitarVacacion(${u.id},${i})" style="background:${C.red}22;border:none;color:${C.red};border-radius:6px;padding:5px 10px;font-size:21px">✕</button>`:""}
+      </div>`).join("")}
+    `:""}
+
+    ${dt==="perm"?`
+      <div style="font-size:21px;color:${C.txt};margin-bottom:10px">Registra faltas, permisos especiales y castigos/promos por dia especifico.</div>
+      ${isMgr()?card(`
+        <div style="font-size:21px;font-weight:800;margin-bottom:10px;color:${C.ora}">+ Registrar</div>
+        ${lbl("Fecha")}<input type="date" id="perm_fecha" value="${S.permFecha}" onchange="S.permFecha=this.value">
+        ${lbl("Tipo")}
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          ${["Permiso","Falta","Castigo/Promo"].map(t=>`<button onclick="S.permTipo='${t}';render()" style="flex:1;background:${S.permTipo===t?stC(t):C.surf};color:${S.permTipo===t?"#071020":C.mut};border:1px solid ${S.permTipo===t?stC(t):C.brd};border-radius:14px;padding:7px 2px;font-size:19px;font-weight:800">${t}</button>`).join("")}
+        </div>
+        ${S.permTipo==="Castigo/Promo"?`
+          ${lbl("Cantidad de castigos")}
+          <input type="number" id="perm_castigos" value="${S.permCastigos}" onchange="S.permCastigos=+this.value" min="1" placeholder="1">
+        `:""}
+        ${lbl("Nota")}<input id="perm_nota" value="${S.permNota}" onchange="S.permNota=this.value" placeholder="Motivo...">
+        <button onclick="agregarPermiso(${u.id})" style="width:100%;background:${C.ora};color:#071020;border:none;border-radius:14px;padding:12px;font-weight:800;font-size:21px">Registrar</button>
+      `):""}
+      ${sec("HISTORIAL DEL MES — "+MESES[mo])}
+      ${permMes.length===0?`<div style="color:${C.mut};font-size:21px">Sin registros este mes</div>`:""}
+      ${permMes.sort((a,b)=>b.fecha.localeCompare(a.fecha)).map((p,i)=>{
+        const idx=(u.permisos||[]).findIndex(x=>x.fecha===p.fecha&&x.tipo===p.tipo&&x.nota===p.nota);
+        return`<div style="background:${C.surf};border-radius:14px;padding:10px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="display:flex;align-items:center;gap:6px">
+              ${tag(p.tipo,stC(p.tipo))}
+              <span style="font-size:26px;color:${C.mut}">${p.fecha}</span>
+              ${p.tipo==="Castigo/Promo"?`<span style="font-size:26px;color:${C.ora};font-weight:800">${p.castigos||1} castigo(s)</span>`:""}
+            </div>
+            ${p.nota?`<div style="font-size:26px;color:${C.mut};margin-top:2px">${p.nota}</div>`:""}
+          </div>
+          ${isMgr()?`<button onclick="quitarPermiso(${u.id},${idx})" style="background:${C.red}22;border:none;color:${C.red};border-radius:6px;padding:5px 10px;font-size:21px">✕</button>`:""}
+        </div>`;}).join("")}
+      ${sec("RESUMEN DEL MES")}
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        ${[["Faltas",faltas,C.red],["Permisos",permisos,C.gold],["Castigos",castigos,C.ora]].map(([l,v,c])=>`<div style="background:${C.card};border-radius:14px;padding:10px;text-align:center"><div style="font-size:21px;font-weight:900;color:${c}">${v}</div><div style="font-size:21px;color:${C.mut}">${l}</div></div>`).join("")}
+      </div>
+    `:""}
+
+    ${dt==="zona"?`
+      <div style="font-size:21px;color:${C.txt};margin-bottom:12px">Zona y hotel asignado a <b>${u.n.split(" ")[0]}</b>.</div>
+
+      <!-- Estado actual -->
+      <div style="background:${C.surf};border-radius:14px;padding:12px;margin-bottom:14px">
+        <div style="font-size:19px;color:${C.mut};font-weight:800;margin-bottom:10px">ASIGNACION ACTUAL</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${u.zona?tag(u.zona,C.pur):tag("Sin zona",C.mut)}
+          ${u.hotel?tag(u.hotel,C.blue):tag("Sin hotel",C.mut)}
+        </div>
+      </div>
+
+      ${isMgr()?`
+        ${lbl("Zona")}
+        <select id="det_zona" onchange="cambiarZona(${u.id},this.value)" style="margin-bottom:10px">
+          <option value="">-- Sin asignar --</option>
+          ${Object.entries(zonas).map(([z])=>`<option value="${z}" ${u.zona===z?"selected":""}>${z}</option>`).join("")}
+        </select>
+
+        ${u.zona&&zonas[u.zona]?`
+          ${lbl("Hotel")}
+          <select id="det_hotel" onchange="cambiarHotel(${u.id},this.value)" style="margin-bottom:10px">
+            <option value="">-- Sin asignar --</option>
+            ${(zonas[u.zona].hoteles||[]).map(h=>`<option value="${h}" ${u.hotel===h?"selected":""}>${h}</option>`).join("")}
+          </select>
+        `:"<div style='font-size:26px;color:"+C.mut+";margin-bottom:10px'>Selecciona una zona para ver sus hoteles.</div>"}
+      `:`<div style="color:${C.mut};font-size:21px;background:${C.surf};border-radius:14px;padding:12px">Solo el Manager-Cerrador puede modificar la zona y hotel.</div>`}
+    `:""}
+
+    ${dt==="pos"?`
+      <div style="font-size:21px;color:${C.txt};margin-bottom:12px">Posicion y rol de <b>${u.n.split(" ")[0]}</b>. Solo el Manager-Cerrador puede modificar estos datos.</div>
+      ${isMgr()?`
+        <div style="background:${C.surf};border-radius:14px;padding:12px;margin-bottom:14px">
+          <div style="font-size:19px;color:${C.mut};font-weight:800;margin-bottom:8px">ESTADO ACTUAL</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">${tag(u.rol,rolC(u.rol))}${tag(u.posicion,posC(u.posicion))}</div>
+        </div>
+
+        ${u.rol==="Vendedor"?`
+          ${lbl("Posicion del Rep")}
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+            ${POS_REP.map(p=>`<button data-uid="${u.id}" data-pos="${p}" onclick="cambiarPos(+this.dataset.uid,this.dataset.pos)" style="background:${u.posicion===p?posC(p):C.surf};color:${u.posicion===p?"#071020":C.mut};border:2px solid ${u.posicion===p?posC(p):C.brd};border-radius:14px;padding:16px 4px;font-size:19px;font-weight:900;display:flex;flex-direction:column;align-items:center;gap:4px">${p}${u.posicion===p?'<span style="font-size:21px;padding:1px 6px">✓ Actual</span>':""}</button>`).join("")}
+          </div>
+          <div style="background:${C.pur}15;border:1px solid ${C.pur}44;border-radius:14px;padding:12px;margin-bottom:14px">
+            <div style="font-size:19px;color:${C.pur};font-weight:800;margin-bottom:8px">PROMOVER A CERRADOR</div>
+            <div style="font-size:26px;color:${C.mut};margin-bottom:10px">Cambia el rol de este rep a Cerrador permanentemente.</div>
+            <button data-uid="${u.id}" onclick="promoverACerrador(+this.dataset.uid)" style="width:100%;background:${C.pur}22;color:${C.pur};border:1px solid ${C.pur}55;border-radius:14px;padding:12px;font-size:21px;font-weight:800">Promover a Cerrador</button>
+          </div>
+        `:""}
+
+        ${u.rol==="Cerrador"||u.rol==="Manager-Cerrador"?`
+          ${lbl("Rol")}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+            <button data-uid="${u.id}" data-rol="Cerrador" onclick="cambiarRolBtn(+this.dataset.uid,this.dataset.rol)" style="background:${u.rol==="Cerrador"?rolC("Cerrador"):C.surf};color:${u.rol==="Cerrador"?"#071020":C.mut};border:2px solid ${u.rol==="Cerrador"?rolC("Cerrador"):C.brd};border-radius:14px;padding:16px 4px;font-size:21px;font-weight:900;display:flex;flex-direction:column;align-items:center;gap:4px">Cerrador${u.rol==="Cerrador"?'<span style="font-size:21px">✓ Actual</span>':""}</button>
+            <button data-uid="${u.id}" data-rol="Manager-Cerrador" onclick="cambiarRolBtn(+this.dataset.uid,this.dataset.rol)" style="background:${u.rol==="Manager-Cerrador"?rolC("Manager-Cerrador"):C.surf};color:${u.rol==="Manager-Cerrador"?"#071020":C.mut};border:2px solid ${u.rol==="Manager-Cerrador"?rolC("Manager-Cerrador"):C.brd};border-radius:14px;padding:16px 4px;font-size:26px;font-weight:900;display:flex;flex-direction:column;align-items:center;gap:4px">Manager-Cerrador${u.rol==="Manager-Cerrador"?'<span style="font-size:21px">✓ Actual</span>':""}</button>
+          </div>
+        `:""}
+
+        <div style="background:${C.surf};border-radius:14px;padding:12px;margin-bottom:14px">
+          <div style="font-size:19px;color:${C.gold};font-weight:800;margin-bottom:10px">SEGURIDAD — PIN ${u.rol==="Vendedor"?"(Vendedores no requieren PIN)":""}</div>
+          ${u.rol!=="Vendedor"?`
+            <div style="font-size:26px;color:${C.mut};margin-bottom:10px">Cambia el PIN de ${u.n.split(" ")[0]} (4 digitos numericos).</div>
+            <div style="display:flex;gap:8px;align-items:flex-end">
+              <div style="flex:1">${lbl("Nuevo PIN")}<input id="pin_nuevo" type="password" maxlength="4" placeholder="••••" style="letter-spacing:8px;font-size:26px;text-align:center"></div>
+              <button data-uid="${u.id}" onclick="cambiarPin(+this.dataset.uid)" style="background:${C.gold};color:#071020;border:none;border-radius:14px;padding:12px 14px;font-size:21px;font-weight:800;margin-bottom:8px;flex-shrink:0">Guardar PIN</button>
+            </div>
+          `:`<div style="font-size:26px;color:${C.mut}">Los vendedores entran sin PIN seleccionando su nombre.</div>`}
+        </div>
+
+        <div style="border-top:1px solid ${C.brd};padding-top:14px;margin-top:4px">
+          <div style="font-size:19px;color:${C.red};font-weight:800;margin-bottom:10px">ZONA DE PELIGRO</div>
+          <button data-uid="${u.id}" onclick="darBaja(+this.dataset.uid)" style="width:100%;background:transparent;color:${C.red};border:1px solid ${C.red}44;border-radius:14px;padding:12px;font-size:21px;font-weight:800">Dar de baja del equipo</button>
+        </div>
+      `:`<div style="color:${C.mut};font-size:21px;background:${C.surf};border-radius:14px;padding:12px">Solo el Manager-Cerrador puede modificar posiciones y roles.</div>`}
+    `:""}
+  `;
+}
+
+// ── PERFIL ────────────────────────────────────────────────────────────────
+// ── LINEA ─────────────────────────────────────────────────────────────────
+// lineaData[fecha][userId] = {tomoPareja:bool, vendioVol:number(0=no vendio)}
+
+function getAyer(){
+  const d=new Date(hoy);d.setDate(d.getDate()-1);
+  return d.toISOString().split("T")[0];
+}
+function getPAD(n){return String(n).padStart(2,"0");}
+function fechaStr(d){return d.getFullYear()+"-"+getPAD(d.getMonth()+1)+"-"+getPAD(d.getDate());}
+
+// Calcula el volumen de agencias del mes actual para un usuario
+function volAgMes(uid){
+  const mo=hoy.getMonth(),yr=hoy.getFullYear();
+  return filtMes(ventas,mo,yr)
+    .filter(v=>v.rep_id===uid&&v.tipo==="Agencia"&&!v.cancelado&&v.tipo!=="Cancelacion")
+    .reduce((a,v)=>a+v.vol,0);
+}
+function volAgMesCerr(uid){
+  const mo=hoy.getMonth(),yr=hoy.getFullYear();
+  return filtMes(ventas,mo,yr)
+    .filter(v=>v.cerr_id===uid&&v.tipo==="Agencia"&&!v.cancelado&&v.tipo!=="Cancelacion")
+    .reduce((a,v)=>a+v.vol,0);
+}
+
+// Volumen vendido ayer por un usuario (solo agencias)
+function volAyerRep(uid){
+  const ayer=getAyer();
+  return ventas
+    .filter(v=>v.fecha===ayer&&v.rep_id===uid&&v.tipo==="Agencia"&&!v.cancelado)
+    .reduce((a,v)=>a+v.vol,0);
+}
+function volAyerCerr(uid){
+  const ayer=getAyer();
+  return ventas
+    .filter(v=>v.fecha===ayer&&v.cerr_id===uid&&!v.cancelado&&v.tipo!=="Cancelacion")
+    .reduce((a,v)=>a+v.vol,0);
+}
+
+// Status de hoy para la linea (trabaja o descansa)
+function trabajaHoyLinea(u){
+  const sd=statusDia(u,todayStr());
+  return sd.status==="Activo";
+}
+// Descansó ayer
+function descansoAyer(u){
+  const sd=statusDia(u,getAyer());
+  return sd.status!=="Activo";
+}
+
+// Semilla determinista por fecha para aleatorio consistente
+function seededRandom(seed,index){
+  let h=seed*2654435761^(index*2246822519);
+  h=((h>>>16)^h)*0x45d9f3b;
+  h=((h>>>16)^h)*0x45d9f3b;
+  h=(h>>>16)^h;
+  return(h>>>0)/4294967296;
+}
+function shuffleSeeded(arr,dateStr){
+  const seed=dateStr.split("-").reduce((a,n)=>a*100+parseInt(n),0);
+  const a=[...arr];
+  for(let i=a.length-1;i>0;i--){
+    const j=Math.floor(seededRandom(seed,i)*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+  return a;
+}
+
+// REGLA MAESTRA: construir la linea de reps para HOY
+function calcularLineaReps(){
+  const hoyStr=todayStr();
+  const ayerStr=getAyer();
+  const diaDelMes=hoy.getDate();
+  const reps=users.filter(u=>u.activo&&u.rol==="Vendedor");
+  const activos=reps.filter(u=>trabajaHoyLinea(u));
+  const descansoHoy=reps.filter(u=>!trabajaHoyLinea(u));
+
+  // Datos de ayer
+  const lineaAyer=lineaData[ayerStr]||{};
+
+  // BLOQUE 1: vendieron ayer — mayor a menor volumen agencia
+  const vendieronAyer=activos
+    .filter(u=>volAyerRep(u.id)>0)
+    .sort((a,b)=>volAyerRep(b.id)-volAyerRep(a.id));
+
+  const vendieronIds=new Set(vendieronAyer.map(u=>u.id));
+  const restantes=activos.filter(u=>!vendieronIds.has(u.id));
+
+  // BLOQUE 2: descansaron ayer (pero trabajan hoy)
+  const descansaronAyer=restantes.filter(u=>descansoAyer(u));
+  const descansaronIds=new Set(descansaronAyer.map(u=>u.id));
+  const sinDescanso=restantes.filter(u=>!descansaronIds.has(u.id));
+
+  // BLOQUE 3: no tomaron pareja ayer (y no vendieron, y no descansaron)
+  const noTomaronPareja=sinDescanso.filter(u=>{
+    const d=lineaAyer[u.id];
+    return !d||(!d.tomoPareja&&!d.vendioVol);
+  });
+  const noTomaronIds=new Set(noTomaronPareja.map(u=>u.id));
+
+  // BLOQUE 4+5: tomaron pareja (o sin registro = se asume tomaron)
+  const tomaronPareja=sinDescanso.filter(u=>!noTomaronIds.has(u.id));
+
+  let bloqueRotacion;
+  if(diaDelMes<=10){
+    // Rotación aleatoria diaria (seeded por fecha)
+    bloqueRotacion=shuffleSeeded(tomaronPareja,hoyStr);
+  } else {
+    // Día 11+: por volumen acumulado de agencias
+    bloqueRotacion=[...tomaronPareja].sort((a,b)=>volAgMes(b.id)-volAgMes(a.id));
+  }
+
+  return{
+    vendieron:vendieronAyer,
+    descansaronAyer:descansaronAyer,
+    noTomaronPareja:noTomaronPareja,
+    rotacion:bloqueRotacion,
+    descansoHoy:descansoHoy,
+    lineaAyer,
+    ayerStr
+  };
+}
+
+// REGLA MAESTRA: construir la linea de cerradores para HOY
+function calcularLineaCerr(){
+  const hoyStr=todayStr();
+  const cerrs=users.filter(u=>u.activo&&(u.rol==="Cerrador"||u.rol==="Manager-Cerrador"));
+  const activos=cerrs.filter(u=>trabajaHoyLinea(u));
+  const descansoHoy=cerrs.filter(u=>!trabajaHoyLinea(u));
+
+  // BLOQUE 1: vendieron ayer — mayor a menor volumen total
+  const vendieronAyer=activos
+    .filter(u=>volAyerCerr(u.id)>0)
+    .sort((a,b)=>volAyerCerr(b.id)-volAyerCerr(a.id));
+  const vendieronIds=new Set(vendieronAyer.map(u=>u.id));
+
+  // Resto: por volumen acumulado de agencias del mes
+  const resto=[...activos.filter(u=>!vendieronIds.has(u.id))]
+    .sort((a,b)=>volAgMesCerr(b.id)-volAgMesCerr(a.id));
+
+  return{vendieron:vendieronAyer,rotacion:resto,descansoHoy};
+}
+
+function renderLinea(){
+  const isTab=S.lineaTab||"reps";
+  const hoyStr=todayStr();
+  const ayerStr=getAyer();
+  const lineaAyer=lineaData[ayerStr]||{};
+  const diaDelMes=hoy.getDate();
+
+  const L=isTab==="reps"?calcularLineaReps():calcularLineaCerr();
+  const esReps=isTab==="reps";
+
+  // Fila de usuario en la línea
+  const fila=(u,num,badge,badgeColor,esDescanso)=>{
+    const sd=statusDia(u,hoyStr);
+    const volMes=esReps?volAgMes(u.id):volAgMesCerr(u.id);
+    const volAyer=esReps?volAyerRep(u.id):volAyerCerr(u.id);
+    const dayD=lineaAyer[u.id];
+    const tomoPareja=dayD&&dayD.tomoPareja;
+    const opacity=esDescanso?0.45:1;
+    return`<div style="display:flex;align-items:center;gap:8px;padding:12px 10px;background:${esDescanso?C.surf:C.card};border:1px solid ${esDescanso?C.brd:badgeColor+"44"};border-radius:14px;margin-bottom:8px;opacity:${opacity}">
+      <div style="font-size:19px;font-weight:900;color:${badgeColor};width:26px;text-align:center">${num}</div>
+      ${av(u,34)}
+      <div style="flex:1">
+        <div style="font-size:19px;font-weight:800">${u.n.split(" ")[0]}</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:2px">
+          <span style="font-size:21px;color:${posC(u.posicion)};font-weight:800">${u.posicion}</span>
+          ${volAyer>0?`<span style="font-size:21px;color:${C.acc};font-weight:800">· Vendió ${FMTK(volAyer)} ayer</span>`:""}
+          ${esDescanso?`<span style="font-size:21px;color:${stC(sd.status)};font-weight:800">· ${sd.status}</span>`:""}
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:26px;font-weight:900;color:${C.gold}">${FMTK(volMes)}</div>
+        <div style="font-size:26px;color:${C.mut}">Vol mes</div>
+      </div>
+      ${isMgr()&&esReps&&!esDescanso?`
+        <div style="display:flex;flex-direction:column;gap:3px">
+          <button data-uid="${u.id}" onclick="marcarPareja(+this.dataset.uid,true)" style="background:${tomoPareja===true?C.acc+"33":"transparent"};border:1px solid ${tomoPareja===true?C.acc:C.brd};border-radius:6px;padding:3px 6px;font-size:21px;font-weight:800;color:${tomoPareja===true?C.acc:C.mut}">✓ Pareja</button>
+          <button data-uid="${u.id}" onclick="marcarPareja(+this.dataset.uid,false)" style="background:${tomoPareja===false?C.red+"33":"transparent"};border:1px solid ${tomoPareja===false?C.red:C.brd};border-radius:6px;padding:3px 6px;font-size:21px;font-weight:800;color:${tomoPareja===false?C.red:C.mut}">✗ Sin par</button>
+        </div>`:""}
+    </div>`;
+  };
+
+  // Sección con título
+  const seccion=(titulo,color,lista,offset,esDescanso)=>{
+    if(lista.length===0)return"";
+    return`<div style="font-size:21px;color:${color};font-weight:900;letter-spacing:1px;margin:10px 0 6px;text-transform:uppercase">${titulo}</div>
+    ${lista.map((u,i)=>fila(u,offset+i+1,color,color,esDescanso||false)).join("")}`;
+  };
+
+  let lineaHTML="";
+  if(esReps){
+    let pos=0;
+    if(L.vendieron.length>0){
+      lineaHTML+=seccion("Vendieron ayer 🏆",C.gold,L.vendieron,pos,false);
+      pos+=L.vendieron.length;
+    }
+    if(L.descansaronAyer.length>0){
+      lineaHTML+=seccion("Descansaron ayer",C.blue,L.descansaronAyer,pos,false);
+      pos+=L.descansaronAyer.length;
+    }
+    if(L.noTomaronPareja.length>0){
+      lineaHTML+=seccion("Sin pareja ayer",C.ora,L.noTomaronPareja,pos,false);
+      pos+=L.noTomaronPareja.length;
+    }
+    if(L.rotacion.length>0){
+      const titulo=diaDelMes<=10?"Rotación (día "+diaDelMes+"/10)":"Por volumen acumulado";
+      lineaHTML+=seccion(titulo,C.acc,L.rotacion,pos,false);
+      pos+=L.rotacion.length;
+    }
+    if(L.descansoHoy.length>0){
+      lineaHTML+=seccion("Descanso hoy — no aplican",C.mut,L.descansoHoy,pos,true);
+    }
+  } else {
+    let pos=0;
+    if(L.vendieron.length>0){
+      lineaHTML+=seccion("Vendieron ayer 🏆",C.gold,L.vendieron,pos,false);
+      pos+=L.vendieron.length;
+    }
+    if(L.rotacion.length>0){
+      lineaHTML+=seccion("Por volumen del mes",C.pur,L.rotacion,pos,false);
+      pos+=L.rotacion.length;
+    }
+    if(L.descansoHoy.length>0){
+      lineaHTML+=seccion("Descanso hoy — no aplican",C.mut,L.descansoHoy,pos,true);
+    }
+  }
+
+  // Info de ayer para el manager
+  const infoAyer=isMgr()&&esReps?`
+    <div style="background:${C.surf};border-radius:14px;padding:10px;margin-bottom:12px;font-size:19px;color:${C.mut}">
+      <span style="color:${C.gold};font-weight:800">Registro de ayer (${ayerStr})</span> —
+      Captura si cada rep tomó pareja para calcular la línea de mañana.
+      <span style="color:${C.acc}"> Los cambios se sincronizan en tiempo real.</span>
+    </div>`:"";
+
+  return`<div style="padding:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <div style="font-size:26px;font-weight:900">Línea del Día</div>
+      <div style="font-size:19px;color:${C.mut}">${hoyStr} · Día ${diaDelMes}</div>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <button onclick="S.lineaTab='reps';render()" style="flex:1;background:${isTab==='reps'?C.acc:C.surf};color:${isTab==='reps'?'#071020':C.mut};border:1px solid ${isTab==='reps'?C.acc:C.brd};border-radius:14px;padding:8px;font-size:21px;font-weight:800">Reps</button>
+      <button onclick="S.lineaTab='cerr';render()" style="flex:1;background:${isTab==='cerr'?C.pur:C.surf};color:${isTab==='cerr'?'#fff':C.mut};border:1px solid ${isTab==='cerr'?C.pur:C.brd};border-radius:14px;padding:8px;font-size:21px;font-weight:800">Cerradores</button>
+    </div>
+    ${isMgr()?card(`
+      <div style="display:flex;justify-content:space-between;align-items:center;${S.showLineaWA?"margin-bottom:14px":""}">
+        <div>
+          <div style="font-size:19px;font-weight:900;color:#25D366">Linea del Dia — WhatsApp</div>
+          ${!S.showLineaWA?`<div style="font-size:19px;color:${C.mut}">${isTab==="reps"?"Reps":"Cerradores"} · ${hoyStr}</div>`:""}
+        </div>
+        <button onclick="S.showLineaWA=!S.showLineaWA;render()" style="background:#25D366;color:#fff;border:none;border-radius:14px;padding:6px 14px;font-size:26px;font-weight:800">${S.showLineaWA?"Cerrar":"Preparar"}</button>
+      </div>
+      ${S.showLineaWA?`
+        <div style="background:#25D36615;border:1px solid #25D36633;border-radius:14px;padding:10px;margin-bottom:10px">
+          <div style="font-size:26px;font-weight:800;color:#25D366;margin-bottom:8px">VISTA PREVIA</div>
+          <pre style="font-size:19px;color:${C.txt};white-space:pre-wrap;font-family:monospace;line-height:1.5;margin:0">${generarTextoLinea(isTab)}</pre>
+        </div>
+        ${lbl("Numero WhatsApp")}
+        <input id="lineaWANum" value="${S.waNum}" onchange="S.waNum=this.value" placeholder="+52 998 000 0000" style="margin-bottom:10px">
+        <button onclick="enviarLineaWA('${isTab}')" style="width:100%;background:#25D366;color:#fff;border:none;border-radius:14px;padding:13px;font-size:26px;font-weight:900">📲 Enviar por WhatsApp</button>
+      `:""}
+    `,"border:1px solid #25D36655"):""}
+    ${infoAyer}
+    ${lineaHTML||`<div style="color:${C.mut};text-align:center;padding:30px">Sin usuarios activos</div>`}
+  </div>`;
+}
+
+function renderMVPs(){
+  const anios=[];for(let y=2025;y<=hoy.getFullYear();y++)anios.push(y);
+  const mo=S.mvpSelMo,yr=S.mvpSelYr;
+  const esMes=S.mvpPeriodo==="mes";
+
+  // Filtrar ventas según periodo
+  const arr=esMes?filtMes(ventas,mo,yr):filtAnio(ventas,yr);
+  const venAct=arr.filter(v=>!v.cancelado&&v.tipo!=="Cancelacion");
+
+  // Calcular stats de reps
+  const reps=users.filter(u=>u.activo&&u.rol==="Vendedor").map(u=>{
+    const mis=venAct.filter(v=>v.rep_id===u.id);
+    const ag=mis.filter(v=>v.tipo==="Agencia");
+    const so=mis.filter(v=>v.tipo==="Socio/Upgrade");
+    const vol=mis.reduce((a,v)=>a+v.vol,0);
+    const volAg=ag.reduce((a,v)=>a+v.vol,0);
+    const qs=mis.reduce((a,v)=>a+(v.qs||0),0);
+    const cts=mis.reduce((a,v)=>a+(v.cts||0),0);
+    return{...u,vol,volAg,vtas:mis.length,ag:ag.length,so:so.length,qs,cts,pct:qs>0?((cts/qs)*100).toFixed(1):"0.0"};
+  }).sort((a,b)=>b.vol-a.vol);
+
+  // Calcular stats de cerradores
+  const cerrs=users.filter(u=>u.activo&&(u.rol==="Cerrador"||u.rol==="Manager-Cerrador")).map(u=>{
+    const mis=venAct.filter(v=>v.cerr_id===u.id);
+    const ag=mis.filter(v=>v.tipo==="Agencia");
+    const so=mis.filter(v=>v.tipo==="Socio/Upgrade");
+    const vol=mis.reduce((a,v)=>a+v.vol,0);
+    const qs=mis.reduce((a,v)=>a+(v.qs||0),0);
+    const cts=mis.reduce((a,v)=>a+(v.cts||0),0);
+    return{...u,vol,ag:ag.length,so:so.length,qs,cts,pct:qs>0?((cts/qs)*100).toFixed(1):"0.0"};
+  }).sort((a,b)=>b.vol-a.vol);
+
+  // PODIO — 3 posiciones con diseño
+  const podio=(lista,colores)=>{
+    if(lista.length===0)return`<div style="color:${C.mut};text-align:center;padding:20px;font-size:21px">Sin datos este periodo</div>`;
+    const medallas=["🥇","🥈","🥉"];
+    const alturas=["90px","70px","55px"];
+    const top3=lista.slice(0,3);
+    // Orden visual: 2do, 1ro, 3ro
+    const orden=top3.length===1?[top3[0]]:top3.length===2?[top3[1],top3[0]]:[top3[1],top3[0],top3[2]];
+    const posOrden=top3.length===1?[0]:top3.length===2?[1,0]:[1,0,2];
+
+    return`
+      <!-- PODIO VISUAL -->
+      <div style="display:flex;align-items:flex-end;justify-content:center;gap:8px;margin-bottom:20px;padding:0 4px">
+        ${orden.map((u,vi)=>{
+          const pos=posOrden[vi];
+          const c=colores[pos]||C.mut;
+          const altura=alturas[pos]||"55px";
+          const grande=pos===0;
+          return`<div style="flex:1;display:flex;flex-direction:column;align-items:center;max-width:120px">
+            <!-- Avatar -->
+            <div style="margin-bottom:8px;position:relative">
+              ${u.foto
+                ?`<img src="${u.foto}" style="width:${grande?60:48}px;height:${grande?60:48}px;border-radius:50%;border:3px solid ${c};object-fit:cover">`
+                :`<div style="width:${grande?60:48}px;height:${grande?60:48}px;border-radius:50%;background:${c}22;border:3px solid ${c};display:flex;align-items:center;justify-content:center;font-size:${grande?22:16}px;font-weight:900;color:${c}">${u.av||u.n.slice(0,2).toUpperCase()}</div>`}
+              <div style="position:absolute;bottom:-4px;right:-4px;font-size:${grande?18:14}px">${medallas[pos]}</div>
+            </div>
+            <!-- Nombre -->
+            <div style="font-size:${grande?12:10}px;font-weight:900;color:${c};text-align:center;margin-bottom:2px;line-height:1.2">${u.n.split(" ")[0].toUpperCase()}</div>
+            <div style="font-size:21px;color:${C.mut};margin-bottom:4px">${u.posicion}</div>
+            <!-- Volumen -->
+            <div style="font-size:${grande?14:11}px;font-weight:900;color:${C.txt};margin-bottom:8px">${FMTK(u.vol)}</div>
+            <!-- Base del podio -->
+            <div style="width:100%;height:${altura};background:linear-gradient(180deg,${c}44,${c}22);border:1px solid ${c}66;border-radius:14px 8px 0 0;display:flex;align-items:center;justify-content:center">
+              <div style="font-size:${grande?28:22}px;font-weight:900;color:${c}">#${pos+1}</div>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>
+      <!-- STATS TOP 3 -->
+      ${top3.map((u,i)=>{
+        const c=colores[i]||C.mut;
+        return`<div style="background:${C.card};border:1px solid ${c}33;border-radius:14px;padding:12px;margin-bottom:10px;display:flex;align-items:center;gap:10px">
+          <div style="font-size:26px">${medallas[i]}</div>
+          ${av(u,38)}
+          <div style="flex:1">
+            <div style="font-size:19px;font-weight:900">${u.n}</div>
+            <div style="font-size:21px;color:${posC(u.posicion)};font-weight:800;margin-top:1px">${u.posicion}</div>
+            <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+              ${tag("AG:"+u.ag,C.acc)}${tag("SO:"+(u.so||0),C.pur)}${tag(u.pct+"%",C.gold)}
+            </div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:21px;font-weight:900;color:${c}">${FMTK(u.vol)}</div>
+            <div style="font-size:26px;color:${C.mut}">volumen</div>
+          </div>
+        </div>`;
+      }).join("")}
+      <!-- RESTO -->
+      ${lista.slice(3).length>0?`
+        <div style="font-size:21px;color:${C.mut};font-weight:800;margin:10px 0 6px;text-transform:uppercase;letter-spacing:1px">Posiciones 4 en adelante</div>
+        ${lista.slice(3).map((u,i)=>`
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:${C.surf};border-radius:14px;margin-bottom:8px">
+            <div style="font-size:19px;font-weight:900;color:${C.mut};width:24px">#${i+4}</div>
+            ${av(u,32)}
+            <div style="flex:1">
+              <div style="font-size:21px;font-weight:800">${u.n}</div>
+              <div style="font-size:21px;color:${posC(u.posicion)}">${u.posicion}</div>
+            </div>
+            <div style="font-size:21px;font-weight:900;color:${C.txt}">${FMTK(u.vol)}</div>
+          </div>`).join("")}
+      `:""}`;
+  };
+
+  // Colores de medallas
+  const goldSilverBronze=[C.gold,"#C0C0C0","#CD7F32"];
+
+  return`<div style="padding:16px">
+    <!-- HEADER -->
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:26px;font-weight:900">🏆 MVPs</div>
+      <div style="font-size:26px;color:${C.mut}">Top vendedores y cerradores</div>
+    </div>
+
+    <!-- SELECTOR PERIODO -->
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      <button onclick="S.mvpPeriodo='mes';render()" style="flex:1;background:${esMes?C.acc:C.surf};color:${esMes?"#071020":C.mut};border:1px solid ${esMes?C.acc:C.brd};border-radius:14px;padding:12px;font-size:21px;font-weight:800">Por Mes</button>
+      <button onclick="S.mvpPeriodo='anio';render()" style="flex:1;background:${!esMes?C.gold:C.surf};color:${!esMes?"#071020":C.mut};border:1px solid ${!esMes?C.gold:C.brd};border-radius:14px;padding:12px;font-size:21px;font-weight:800">Por Año</button>
+    </div>
+
+    ${esMes?`
+      <!-- SELECTOR AÑO -->
+      <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap">
+        ${anios.map(y=>`<button onclick="S.mvpSelYr=${y};render()" style="background:${yr===y?C.gold:C.surf};color:${yr===y?"#071020":C.mut};border:1px solid ${yr===y?C.gold:C.brd};border-radius:20px;padding:4px 12px;font-size:26px;font-weight:800">${y}</button>`).join("")}
+      </div>
+      <!-- SELECTOR MES -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:16px">
+        ${MESES_C.map((m,i)=>`<button onclick="S.mvpSelMo=${i};render()" style="background:${mo===i?C.acc:C.surf};color:${mo===i?"#071020":C.mut};border:1px solid ${mo===i?C.acc:C.brd};border-radius:14px;padding:7px 2px;font-size:19px;font-weight:800">${m}</button>`).join("")}
+      </div>
+    `:`
+      <!-- SELECTOR AÑO ANUAL -->
+      <div style="display:flex;gap:6px;margin-bottom:16px">
+        ${anios.map(y=>`<button onclick="S.mvpSelYr=${y};render()" style="flex:1;background:${yr===y?C.gold:C.surf};color:${yr===y?"#071020":C.mut};border:1px solid ${yr===y?C.gold:C.brd};border-radius:14px;padding:12px;font-size:19px;font-weight:800">${y}</button>`).join("")}
+      </div>
+    `}
+
+    <!-- PODIO REPS -->
+    <div style="background:${C.card};border:1px solid ${C.acc}44;border-radius:16px;padding:16px;margin-bottom:16px">
+      <div style="text-align:center;margin-bottom:14px">
+        <div style="font-size:26px;font-weight:900;color:${C.acc}">TOP VENDEDORES</div>
+        <div style="font-size:19px;color:${C.mut}">Liner · FTM · FTB — ${esMes?MESES[mo]+" "+yr:"Año "+yr}</div>
+      </div>
+      ${podio(reps,goldSilverBronze)}
+    </div>
+
+    <!-- PODIO CERRADORES -->
+    <div style="background:${C.card};border:1px solid ${C.pur}44;border-radius:16px;padding:16px;margin-bottom:16px">
+      <div style="text-align:center;margin-bottom:14px">
+        <div style="font-size:26px;font-weight:900;color:${C.pur}">TOP CERRADORES</div>
+        <div style="font-size:19px;color:${C.mut}">Cerrador · Manager-Cerrador — ${esMes?MESES[mo]+" "+yr:"Año "+yr}</div>
+      </div>
+      ${podio(cerrs,goldSilverBronze)}
+    </div>
+  </div>`;
+}
+
+function renderZonas(){
+  const zonasArr=Object.entries(zonas);
+  return`<div style="padding:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:26px;font-weight:900">Zonas y Hoteles</div>
+    </div>
+    ${zonasArr.map(([nombreZona,zdata])=>`
+      <div style="background:${C.card};border:1px solid ${C.brd};border-radius:14px;padding:16px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:26px;font-weight:900;color:${C.acc}">${nombreZona}</div>
+          ${isMgr()?`<button data-zona="${nombreZona}" onclick="agregarHotel(this.dataset.zona)" style="background:${C.acc}22;color:${C.acc};border:1px solid ${C.acc}44;border-radius:14px;padding:5px 10px;font-size:26px;font-weight:800">+ Hotel</button>`:""}
+        </div>
+        ${(zdata.hoteles||[]).length===0?`<div style="font-size:21px;color:${C.mut};font-style:italic">Sin hoteles asignados</div>`:""}
+        ${(zdata.hoteles||[]).map(hotel=>`
+          <div style="background:${C.surf};border-radius:14px;padding:12px;margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <div style="font-size:19px;font-weight:800">${hotel}</div>
+              ${isMgr()?`<button data-zona="${nombreZona}" data-hotel="${hotel}" onclick="quitarHotel(this.dataset.zona,this.dataset.hotel)" style="background:${C.red}22;border:none;color:${C.red};border-radius:6px;padding:4px 8px;font-size:26px">✕</button>`:""}
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">
+              ${(zdata.locs[hotel]||[]).map(loc=>`
+                <div style="display:flex;align-items:center;gap:4px;background:${C.card};border:1px solid ${C.brd};border-radius:14px;padding:4px 8px">
+                  <span style="font-size:21px;font-weight:800;color:${C.blue}">${loc}</span>
+                  ${isMgr()?`<button data-zona="${nombreZona}" data-hotel="${hotel}" data-loc="${loc}" onclick="quitarLoc(this.dataset.zona,this.dataset.hotel,this.dataset.loc)" style="background:none;border:none;color:${C.red};font-size:21px;padding:0;margin-left:2px">✕</button>`:""}
+                </div>`).join("")}
+            </div>
+            ${isMgr()?`<div style="display:flex;gap:6px">
+              <input id="newloc_${nombreZona}_${hotel}" placeholder="Nueva loc (ej: NV1)" style="flex:1;margin-bottom:0;padding:12px 12px;font-size:21px">
+              <button data-zona="${nombreZona}" data-hotel="${hotel}" onclick="agregarLoc2(this.dataset.zona,this.dataset.hotel,'newloc_${nombreZona}_${hotel}')" style="background:${C.blue};color:#fff;border:none;border-radius:14px;padding:6px 12px;font-size:21px;font-weight:800">+</button>
+            </div>`:""}
+          </div>`).join("")}
+      </div>`).join("")}
+    ${isMgr()?card(`
+      <div style="font-size:26px;font-weight:900;color:${C.gold};margin-bottom:10px">AGREGAR NUEVA ZONA</div>
+      <input id="new_zona_name" placeholder="Nombre de la zona (ej: Zona Centro)" style="margin-bottom:10px">
+      <button onclick="agregarZona()" style="width:100%;background:${C.gold};color:#071020;border:none;border-radius:14px;padding:10px;font-size:19px;font-weight:800">+ Agregar Zona</button>
+    `,"border:1px solid "+C.gold+"55"):""}
+  </div>`;
+}
+
+function renderPerfil(){
+  return`<div style="padding:16px">
+    <div style="font-size:26px;font-weight:900;margin-bottom:12px">Mi Perfil</div>
+    ${card(`
+      <div style="text-align:center;padding:8px">
+        <div style="position:relative;display:inline-block;margin-bottom:12px">
+          ${av(cu(),80)}
+          <label for="misFotoInput" style="position:absolute;bottom:2px;right:2px;background:${C.acc};border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:26px;border:2px solid #070b14">&#9998;</label>
+          <input type="file" id="misFotoInput" accept="image/*" style="display:none" onchange="subirFoto(${cu().id},this)">
+        </div>
+        <div style="font-size:26px;font-weight:900">${cu().n}</div>
+        <div style="margin-top:8px">${tag(cu().rol,rolC(cu().rol))}${tag(cu().posicion,posC(cu().posicion))}${cu().zona?tag(cu().zona,C.pur):""}${cu().hotel?tag(cu().hotel,C.blue):""}</div>
+        <div style="margin-top:6px">${tag(statusDia(cu()).status,stC(statusDia(cu()).status))}</div>
+        <div style="font-size:26px;color:${C.mut};margin-top:6px">Secrets Mirabel</div>
+      </div>
+      <div style="border-top:1px solid ${C.brd};padding-top:12px;margin-top:4px">
+        ${[[cu().nacimiento||"--","&#128197; Nacimiento"],[cu().cel||"--","&#128222; Celular"],[cu().email||"--","&#9993; Email"]].map(([v,l])=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid ${C.brd}22"><span style="font-size:26px;color:${C.mut}">${l}</span><span style="font-size:21px;font-weight:700">${v}</span></div>`).join("")}
+      </div>
+      <button onclick="abrirDetalle(${cu().id})" style="width:100%;background:${C.acc}22;color:${C.acc};border:1px solid ${C.acc}44;border-radius:14px;padding:12px;font-size:21px;font-weight:800;margin-top:12px">Editar mis datos</button>
+    `)}
+    ${card(`
+      <div style="font-size:19px;color:${C.mut};font-weight:800;margin-bottom:12px">SESION ACTIVA</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        ${av(cu(),44)}
+        <div>
+          <div style="font-size:21px;font-weight:800">${cu().n}</div>
+          <div style="font-size:19px;color:${rolC(cu().rol)};font-weight:800">${cu().rol} — ${cu().posicion}</div>
+          <div style="font-size:19px;color:${stC(statusDia(cu()).status)};margin-top:2px">${statusDia(cu()).status}</div>
+        </div>
+      </div>
+      <button onclick="cerrarSesion()" style="width:100%;background:#ff475722;color:#ff4757;border:1px solid #ff475744;border-radius:14px;padding:11px;font-size:19px;font-weight:800">Cerrar sesion</button>
+    `)}
+  </div>`;
+}
+
+// ── MODALES ───────────────────────────────────────────────────────────────
+function renderModal(){
+  if(!S.modal)return"";
+  const reps=users.filter(u=>u.rol==="Vendedor"&&u.activo);
+  const cerrs=users.filter(u=>(u.rol==="Cerrador"||u.rol==="Manager-Cerrador")&&u.activo);
+  let content="";
+  if(S.modal==="venta"){
+    const f=S.vf;
+    content=`<div style="font-size:26px;font-weight:900;margin-bottom:12px">Nueva Venta — ${f.fecha}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>${lbl("Contrato")}<input id="vf_cont" value="${f.contrato}" placeholder="C-001"></div>
+        <div>${lbl("Tipo")}<select id="vf_tipo">${["Agencia","Socio/Upgrade"].map(o=>`<option ${f.tipo===o?"selected":""}>${o}</option>`).join("")}</select></div>
+        <div>${lbl("Membresia")}<select id="vf_mem">${MEMBS.map(m=>`<option ${f.mem===m?"selected":""}>${m}</option>`).join("")}</select></div>
+        <div style="grid-column:span 2">
+          ${lbl("Locacion")}
+          <select id="vf_loc">
+            ${allLocs().map(l=>`<option value="${l}" ${f.loc===l?"selected":""}>${l}</option>`).join("")}
+          </select>
+        </div>
+        <div style="grid-column:span 2">${lbl("Cliente")}<input id="vf_cli" value="${f.cliente}" placeholder="Nombre del cliente"></div>
+        <div>${lbl("Volumen $")}<input id="vf_vol" type="number" value="${f.vol}"></div>
+        <div>${lbl("Enganche $")}<input id="vf_eng" type="number" value="${f.eng}"></div>
+        <div>${lbl("Rep")}<select id="vf_rep"><option value="">--</option>${reps.map(u=>`<option value="${u.id}" ${f.rep_id==u.id?"selected":""}>${u.n}</option>`).join("")}</select></div>
+        <div>${lbl("Cerrador")}<select id="vf_cerr"><option value="">--</option>${cerrs.map(u=>`<option value="${u.id}" ${f.cerr_id==u.id?"selected":""}>${u.n}</option>`).join("")}</select></div>
+        <div>${lbl("Qs")}<input id="vf_qs" type="number" value="${f.qs}"></div>
+        <div>${lbl("Cts")}<input id="vf_cts" type="number" value="${f.cts}"></div>
+        <div>${lbl("Premiere sem")}<input id="vf_prem" type="number" value="${f.premiere}"></div>
+        <div>${lbl("Turquia")}<input id="vf_tq" type="number" value="${f.turquia}"></div>
+        <div>${lbl("Flybacks")}<input id="vf_fb" type="number" value="${f.flybacks}"></div>
+        <div style="grid-column:span 2">${lbl("Notas")}<input id="vf_notas" value="${f.notas}"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="closeModal()" style="flex:1;background:${C.surf};color:${C.mut};border:1px solid ${C.brd};border-radius:14px;padding:12px;font-weight:800">Cancelar</button>
+        <button onclick="guardarVenta()" style="flex:2;background:${C.acc};color:#071020;border:none;border-radius:14px;padding:12px;font-weight:800">Guardar Venta</button>
+      </div>`;
+  }
+  if(S.modal==="tour"){
+    const tm=S.tourModal||{};
+    const existT=toursData[tm.fecha]&&toursData[tm.fecha][tm.uid]||{qs:0,cts:0};
+    content=`
+      <div style="font-size:21px;font-weight:900;margin-bottom:4px">Registrar Tours</div>
+      <div style="font-size:26px;color:${C.mut};margin-bottom:14px">${tm.fecha} — ${getName(tm.uid)||cu().n}</div>
+      <div style="background:${C.surf};border-radius:14px;padding:12px;margin-bottom:12px">
+        <div style="font-size:19px;color:${C.mut};font-weight:800;margin-bottom:10px">Una venta siempre cuenta como Q automaticamente</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:${C.acc}15;border:1px solid ${C.acc}44;border-radius:14px;padding:12px;text-align:center">
+            ${lbl("Q's (cuentan para cierre)")}
+            <input id="tm_qs" type="number" min="0" value="${existT.qs||0}" style="font-size:26px;font-weight:900;text-align:center;color:${C.acc};border-color:${C.acc}66">
+          </div>
+          <div style="background:${C.mut}15;border:1px solid ${C.brd};border-radius:14px;padding:12px;text-align:center">
+            ${lbl("CT's (no cuentan)")}
+            <input id="tm_cts" type="number" min="0" value="${existT.cts||0}" style="font-size:26px;font-weight:900;text-align:center;color:${C.mut};border-color:${C.brd}">
+          </div>
+        </div>
+      </div>
+      <div style="font-size:19px;color:${C.mut};background:${C.surf};border-radius:14px;padding:8px;margin-bottom:12px">
+        % Cierre = Ventas / Q's · Los CT's no afectan el porcentaje
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="closeModal()" style="flex:1;background:${C.surf};color:${C.mut};border:1px solid ${C.brd};border-radius:14px;padding:12px;font-weight:800">Cancelar</button>
+        <button onclick="guardarTour()" style="flex:2;background:${C.blue};color:#fff;border:none;border-radius:14px;padding:12px;font-weight:800">Guardar Tours</button>
+      </div>`;
+  }
+  if(S.modal==="cxl"){
+    if(S.cxlStep===1){content=`
+      <div style="font-size:26px;font-weight:900;color:${C.red};margin-bottom:12px">Registrar Cancelacion</div>
+      ${lbl("No. Contrato")}<input id="cx_cont" placeholder="C-001">
+      <div style="text-align:center;font-size:26px;color:${C.mut};margin:0 0 8px">— o busca por —</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div style="grid-column:span 2">${lbl("Cliente")}<input id="cx_cli" placeholder="Nombre..."></div>
+        <div>${lbl("Fecha")}<input id="cx_fecha" type="date"></div>
+        <div>${lbl("Volumen")}<input id="cx_vol" type="number"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="closeModal()" style="flex:1;background:${C.surf};color:${C.mut};border:1px solid ${C.brd};border-radius:14px;padding:12px;font-weight:800">Cancelar</button>
+        <button onclick="buscarCxl()" style="flex:2;background:${C.red};color:#fff;border:none;border-radius:14px;padding:12px;font-weight:800">Buscar</button>
+      </div>`;}
+    if(S.cxlStep===2){content=`
+      <div style="font-size:26px;font-weight:900;margin-bottom:12px">Resultados (${S.cxlR.length})</div>
+      ${S.cxlR.length===0?`<div style="color:${C.mut};background:${C.surf};border-radius:14px;padding:12px;margin-bottom:12px">Sin resultados.</div>`:""}
+      ${S.cxlR.map(v=>`<div style="background:${C.surf};border:1px solid ${C.brd};border-left:3px solid ${C.acc};border-radius:14px;padding:10px 12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:21px;font-weight:900;color:${C.acc}">${FMT(v.vol)}</div><div style="font-size:26px;color:${C.txt}">${v.cliente} — ${v.mem}</div><div style="font-size:26px;color:${C.mut}">${v.fecha}</div></div>
+        <button onclick="elegirCxl(${v.id})" style="background:${C.red};color:#fff;border:none;border-radius:14px;padding:7px 10px;font-size:26px;font-weight:800">Elegir</button>
+      </div>`).join("")}
+      <button onclick="S.cxlStep=1;render()" style="width:100%;background:${C.surf};color:${C.mut};border:1px solid ${C.brd};border-radius:14px;padding:12px;font-weight:800;margin-top:4px">Volver</button>`;}
+    if(S.cxlStep===3&&S.cxlOrig){const o=S.cxlOrig;content=`
+      <div style="font-size:26px;font-weight:900;color:${C.red};margin-bottom:12px">Confirmar Cancelacion</div>
+      <div style="background:${C.surf};border:2px solid ${C.red};border-radius:14px;padding:12px;margin-bottom:12px">
+        <div style="font-size:21px;font-weight:900;color:${C.red}">${FMT(o.vol)}</div>
+        <div style="font-size:21px;color:${C.txt};margin-top:4px">${o.cliente} — ${o.mem}</div>
+        <div style="font-size:26px;color:${C.mut}">${o.contrato} | ${o.fecha}</div>
+      </div>
+      ${lbl("Razon")}<input id="cx_notas" placeholder="Motivo...">
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="S.cxlStep=2;render()" style="flex:1;background:${C.surf};color:${C.mut};border:1px solid ${C.brd};border-radius:14px;padding:12px;font-weight:800">Atras</button>
+        <button onclick="confirmarCxl()" style="flex:2;background:${C.red};color:#fff;border:none;border-radius:14px;padding:12px;font-weight:800">Confirmar</button>
+      </div>`;}
+  }
+  if(S.modal==="detalle"){content=renderDetalle();}
+
+  return`<div class="modal-bg" id="mbg" onclick="if(event.target.id==='mbg')closeModal()">
+    <div class="modal-inner">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button onclick="closeModal()" style="background:none;border:none;color:${C.mut};font-size:26px">&#x2715;</button></div>
+      ${content}
+    </div>
+  </div>`;
+}
+
+// ── RENDER PRINCIPAL ──────────────────────────────────────────────────────
+function render(){
+  if(!LOGIN.activo){renderLogin();return;}
+  let main="";
+  const t=S.tab;
+  if(t==="r")main=isRep()?renderRankingReps():renderReporte();
+  else if(t==="c")main=renderCalendario();
+  else if(t==="v")main=renderVentas();
+  else if(t==="e"&&!isRep())main=renderEquipo();
+  else if(t==="z"&&!isRep())main=renderZonas();
+  else if(t==="l")main=renderLinea();
+  else if(t==="m")main=renderMVPs();
+  else if(t==="p")main=renderPerfil();
+  document.getElementById("app").innerHTML=renderHeader()+main+renderTabs()+renderModal();
+}
+
+function renderRankingReps(){
+  const mo=hoy.getMonth(),yr=hoy.getFullYear();
+  const vm=filtMes(ventas,mo,yr),va=filtAnio(ventas,yr);
+  const reps=users.filter(u=>u.rol==="Vendedor"&&u.activo);
+  const tabla=(arr,titulo)=>{
+    const l=[...reps].map(u=>({...u,vol:volNetoU(arr,u.id,"rep_id"),vtas:arr.filter(v=>v.rep_id===u.id&&!v.cancelado&&v.tipo!=="Cancelacion").length})).sort((a,b)=>b.vol-a.vol);
+    return card(`<div style="font-size:19px;color:${C.mut};font-weight:800;margin-bottom:10px">${titulo}</div>
+      ${l.map((u,i)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;background:${u.id===cu().id?C.acc+"11":"transparent"};border-radius:14px;padding:${u.id===cu().id?"6px 8px":"0"}">
+        <span style="font-weight:900;color:${i===0?C.gold:C.mut};width:22px">#${i+1}</span>
+        ${av(u,30)}
+        <div style="flex:1"><div style="font-size:21px;font-weight:800;color:${u.id===cu().id?C.acc:C.txt}">${u.n}${u.id===cu().id?" (Tu)":""}</div>${bar(u.vol,l[0]?.vol||1,i===0?C.gold:C.acc)}</div>
+        <div style="font-size:21px;font-weight:900;color:${i===0?C.gold:C.acc}">${FMTK(u.vol)}</div>
+      </div>`).join("")}`);
+  };
+  return`<div style="padding:16px">
+    <div style="font-size:26px;font-weight:900;margin-bottom:12px">Ranking Reps</div>
+    ${tabla(vm,"MES — "+MESES[mo].toUpperCase())}
+    ${tabla(va,"AÑO "+hoy.getFullYear())}
+  </div>`;
+}
+
+// ── ACCIONES ──────────────────────────────────────────────────────────────
+window.go=t=>{S.tab=t;render();};
+window.setVista=v=>{S.vista=v;render();};
+window.setMo=m=>{S.selMo=m;render();};
+window.setYr=y=>{S.selYr=y;render();};
+window.navMo=d=>{let m=S.calMo+d,y=S.calYr;if(m<0){m=11;y--;}if(m>11){m=0;y++;}S.calMo=m;S.calYr=y;S.calSel=null;render();};
+window.closeModal=()=>{S.modal=null;S.detalleId=null;render();};
+window.upDR=(k,v)=>{if(S.dRep)S.dRep[k]=v;};
+window.upLoc=(loc,campo,v)=>{if(S.dRep?.ld){if(!S.dRep.ld[loc])S.dRep.ld[loc]={};S.dRep.ld[loc][campo]=v;}};
+window.addLoc=()=>{const l=(document.getElementById("nuevaLoc")||{}).value?.trim().toUpperCase();if(!l)return;if(S.dRep?.ld&&!S.dRep.ld[l])S.dRep.ld[l]={qs:"",vol:""};if(!S.locsExtra.includes(l))S.locsExtra.push(l);render();};
+window.openVenta=fecha=>{S.vf={contrato:"",tipo:"Agencia",mem:"Gold",vol:"",eng:"",cliente:"",rep_id:"",cerr_id:cu().id,loc:"TK1",premiere:"",turquia:"",flybacks:"",qs:"",cts:"",notas:"",fecha};S.modal="venta";render();};
+window.openVentaU=uid=>{S.vf={contrato:"",tipo:"Agencia",mem:"Gold",vol:"",eng:"",cliente:"",rep_id:uid,cerr_id:"",loc:"TK1",premiere:"",turquia:"",flybacks:"",qs:"",cts:"",notas:"",fecha:todayStr()};S.modal="venta";render();};
+window.openCxl=fecha=>{S.cxlFecha=fecha;S.cxlStep=1;S.modal="cxl";render();};
+window.openCxlDet=()=>{S.cxlFecha=todayStr();S.cxlStep=1;S.modal="cxl";render();};
+window.abrirDetalle=id=>{S.detalleId=id;S.detTab="info";S.modal="detalle";render();};
+window.darBaja=id=>{if(!confirm("¿Dar de baja a este miembro?"))return;const u=users.find(u=>u.id===id);if(u){u.activo=false;S.modal=null;S.detalleId=null;render();}};
+window.toggleDayOff=(id,dia)=>{const u=users.find(u=>u.id===id);if(!u)return;if(!u.dayOff)u.dayOff=[];const idx=u.dayOff.indexOf(dia);if(idx>=0)u.dayOff.splice(idx,1);else u.dayOff.push(dia);render();};
+// ── TOURS ─────────────────────────────────────────────────────────────────
+window.openTourModal=fecha=>{
+  // Cualquier usuario puede registrar sus propios tours
+  S.tourModal={fecha,uid:cu().id,qs:0,cts:0};
+  S.modal="tour";
+  render();
+};
+window.guardarTour=()=>{
+  const tm=S.tourModal;if(!tm)return;
+  const qs=+(document.getElementById("tm_qs")||{}).value||0;
+  const cts=+(document.getElementById("tm_cts")||{}).value||0;
+  if(!toursData[tm.fecha])toursData[tm.fecha]={};
+  toursData[tm.fecha][tm.uid]={qs,cts};
+  S.modal=null;S.tourModal=null;
+  saveRender();
+};
+
+// ── BUDGET ────────────────────────────────────────────────────────────────
+window.actualizarBudget=()=>{
+  const val=+(document.getElementById("budgetInput")||{}).value||0;
+  if(!val||val<1){alert("Ingresa un valor valido para el budget");return;}
+  BUDGET=val;
+  guardarDatos();
+  alert("Budget actualizado: "+FMT(BUDGET));
+};
+
+// ── HELPER: guardar y redibujar ───────────────────────────────────────────
+function saveRender(){guardarDatos();render();}
+function saveLogin(){guardarDatos();renderLogin();}
+
+window.upInfo=(id,campo,val)=>{
+  const u=users.find(u=>u.id===id);
+  if(!u)return;
+  u[campo]=val;
+  if(campo==="nombre"||campo==="apellido"){
+    u.n=((u.nombre||"")+" "+(u.apellido||"")).trim();
+    u.av=u.n.split(" ").filter(Boolean).map(w=>w[0]).join("").slice(0,2).toUpperCase();
+  }
+  guardarDatos();
+};
+window.subirFoto=(id,input)=>{
+  const file=input.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const u=users.find(u=>u.id===id);
+    if(u){u.foto=e.target.result;saveRender();}
+  };
+  reader.readAsDataURL(file);
+};
+window.cambiarPin=id=>{
+  const p=(document.getElementById('pin_nuevo')||{}).value||'';
+  if(p.length!==4||!p.split('').every(c=>'0123456789'.includes(c))){alert('El PIN debe ser exactamente 4 digitos numericos.');return;}
+  const u=users.find(u=>u.id===id);
+  if(u){u.pin=p;alert('PIN actualizado para '+u.n);saveRender();}
+};
+window.cambiarPos=(id,pos)=>{const u=users.find(u=>u.id===id);if(u){u.posicion=pos;saveRender();}};
+window.cambiarZona=(id,zona)=>{
+  const u=users.find(u=>u.id===id);
+  if(!u)return;
+  u.zona=zona;
+  u.hotel=""; // reset hotel when zone changes
+  saveRender();
+};
+window.cambiarHotel=(id,hotel)=>{
+  const u=users.find(u=>u.id===id);
+  if(!u)return;
+  u.hotel=hotel;
+  saveRender();
+};
+window.cambiarRol=(id,rol)=>{const u=users.find(u=>u.id===id);if(u){u.rol=rol;u.posicion=rol;saveRender();}};
+// Cambiar posicion de un rep (Liner/FTM/FTB)
+window.cambiarRolBtn=(id,rol)=>{
+  const u=users.find(u=>u.id===id);
+  if(!u)return;
+  if(rol==="Manager-Cerrador"&&!u.pin){
+    const pinEl=document.getElementById("pin_nuevo");
+    const pin=pinEl?(pinEl.value||"").replace(/[^0-9]/g,"").slice(0,4):"";
+    if(pin.length!==4){
+      alert("Este usuario no tiene PIN. Escribe uno en el campo de Seguridad primero y guarda el PIN, luego cambia el rol.");
+      return;
+    }
+    u.pin=pin;
+  }
+  u.rol=rol;
+  u.posicion=rol;
+  saveRender();
+};
+// Promover un Vendedor a Cerrador
+window.promoverACerrador=(id)=>{
+  const u=users.find(u=>u.id===id);
+  if(!u)return;
+  // Usar el campo pin_nuevo si existe en pantalla, si no pedir al usuario
+  const pinEl=document.getElementById("pin_nuevo");
+  const pin=pinEl?(pinEl.value||"").replace(/[^0-9]/g,"").slice(0,4):"";
+  if(pin.length!==4){
+    alert("Primero escribe un PIN de 4 digitos en el campo de Seguridad y luego toca Promover.");
+    return;
+  }
+  u.pin=pin;
+  u.rol="Cerrador";
+  u.posicion="Cerrador";
+  saveRender();
+};
+window.cambiarRolCompleto=(id,rol,pos)=>{
+  const u=users.find(u=>u.id===id);if(!u)return;
+  u.rol=rol;u.posicion=pos;saveRender();
+};
+
+window.agregarVacacion=id=>{
+  const u=users.find(u=>u.id===id);if(!u)return;
+  const desde=S.vacDesde,hasta=S.vacHasta;
+  if(!desde||!hasta){alert("Selecciona fecha desde y hasta");return;}
+  if(!u.vacaciones)u.vacaciones=[];
+  u.vacaciones.push({desde,hasta,nota:S.vacNota});
+  S.vacDesde="";S.vacHasta="";S.vacNota="";saveRender();
+};
+window.quitarVacacion=(id,idx)=>{const u=users.find(u=>u.id===id);if(u&&u.vacaciones){u.vacaciones.splice(idx,1);saveRender();}};
+window.agregarPermiso=id=>{
+  const u=users.find(u=>u.id===id);if(!u)return;
+  const fecha=S.permFecha,tipo=S.permTipo,nota=S.permNota;
+  if(!fecha){alert("Selecciona una fecha");return;}
+  if(!u.permisos)u.permisos=[];
+  u.permisos.push({fecha,tipo,nota,castigos:tipo==="Castigo/Promo"?S.permCastigos:0});
+  S.permNota="";S.permFecha=todayStr();saveRender();
+};
+window.quitarPermiso=(id,idx)=>{const u=users.find(u=>u.id===id);if(u&&u.permisos){u.permisos.splice(idx,1);saveRender();}};
+window.guardarNuevo=()=>{
+  const n=(document.getElementById("nu_n")||{}).value?.trim();
+  if(!n){alert("Escribe el nombre completo");return;}
+  const r=S.nuRol||"Vendedor";
+  const pos=r==="Vendedor"?(S.nuPos||"Liner"):r;
+  let pin=null;
+  if(r!=="Vendedor"){
+    const pinEl=document.getElementById("nu_pin");
+    pin=(pinEl?pinEl.value:"").replace(/[^0-9]/g,"").slice(0,4);
+    if(pin.length!==4){alert("El PIN debe tener exactamente 4 digitos numericos.");return;}
+  }
+  const partes=n.split(" ");
+  const nom=partes[0]||n;
+  const ape=partes.slice(1).join(" ")||"";
+  const av=n.split(" ").filter(Boolean).map(w=>w[0]).join("").slice(0,2).toUpperCase();
+  users.push({id:Date.now(),n,nombre:nom,apellido:ape,rol:r,posicion:pos,av,foto:null,activo:true,pin,nacimiento:"",cel:"",email:"",zona:S.nuZona||"",hotel:S.nuHotel||"",dayOff:[],vacaciones:[],permisos:[]});
+  S.showAdd=false;S.nuRol="Vendedor";S.nuPos="Liner";S.nuZona="";S.nuHotel="";
+  saveRender();
+};
+window.guardarVenta=()=>{
+  const vol=+(document.getElementById("vf_vol")||{}).value||0;
+  if(!vol){alert("Ingresa el volumen");return;}
+  const eng=+(document.getElementById("vf_eng")||{}).value||0;
+  const pct=vol>0?(eng/vol*100).toFixed(1):0;
+  ventas.push({id:Date.now(),
+    contrato:(document.getElementById("vf_cont")||{}).value||"",
+    fecha:S.vf.fecha,
+    tipo:(document.getElementById("vf_tipo")||{}).value||"Agencia",
+    mem:(document.getElementById("vf_mem")||{}).value||"Gold",
+    vol,eng,pctEng:+pct,
+    cliente:(document.getElementById("vf_cli")||{}).value||"",
+    rep_id:+((document.getElementById("vf_rep")||{}).value||0),
+    cerr_id:+((document.getElementById("vf_cerr")||{}).value||0),
+    loc:(document.getElementById("vf_loc")||{}).value||"TK1",
+    premiere:+((document.getElementById("vf_prem")||{}).value||0),
+    turquia:+((document.getElementById("vf_tq")||{}).value||0),
+    flybacks:+((document.getElementById("vf_fb")||{}).value||0),
+    qs:+((document.getElementById("vf_qs")||{}).value||0),
+    cts:+((document.getElementById("vf_cts")||{}).value||0),
+    notas:(document.getElementById("vf_notas")||{}).value||"",
+    cancelado:false});
+  S.dRep=null;S.modal=null;saveRender();
+};
+window.buscarCxl=()=>{
+  const cont=(document.getElementById("cx_cont")||{}).value?.trim();
+  const cli=(document.getElementById("cx_cli")||{}).value?.trim();
+  const fecha=(document.getElementById("cx_fecha")||{}).value;
+  const vol=+((document.getElementById("cx_vol")||{}).value||0);
+  let r=ventas.filter(v=>v.tipo!=="Cancelacion"&&!v.cancelado);
+  if(cont)r=r.filter(v=>v.contrato?.toLowerCase()===cont.toLowerCase());
+  else{if(cli)r=r.filter(v=>v.cliente.toLowerCase().includes(cli.toLowerCase()));if(fecha)r=r.filter(v=>v.fecha===fecha);if(vol)r=r.filter(v=>v.vol===vol);}
+  S.cxlR=r;S.cxlStep=2;saveRender();
+};
+window.elegirCxl=id=>{S.cxlOrig=ventas.find(v=>v.id===id)||null;S.cxlStep=3;saveRender();};
+window.confirmarCxl=()=>{
+  const o=S.cxlOrig;if(!o)return;
+  const notas=(document.getElementById("cx_notas")||{}).value||"";
+  ventas.push({id:Date.now(),contrato:o.contrato+"-CXL",fecha:S.cxlFecha||todayStr(),tipo:"Cancelacion",mem:o.mem,vol:o.vol,eng:0,pctEng:0,cliente:o.cliente,rep_id:o.rep_id,cerr_id:o.cerr_id,loc:o.loc,premiere:0,turquia:0,flybacks:0,qs:0,cts:0,notas,cancelado:false});
+  const vx=ventas.find(v=>v.id===o.id);if(vx)vx.cancelado=true;
+  S.dRep=null;S.modal=null;S.cxlOrig=null;saveRender();
+};
+window.sendWA=()=>{
+  const dr=S.dRep;if(!dr)return;
+  const td=todayStr();
+  const vDia=filtDia(ventas,td).filter(v=>!v.cancelado&&v.tipo!=="Cancelacion");
+  const cxlDia=filtDia(ventas,td).filter(v=>v.tipo==="Cancelacion");
+  const vmMes=filtMes(ventas,hoy.getMonth(),hoy.getFullYear());
+  const volMTD=vmMes.filter(v=>!v.cancelado&&v.tipo!=="Cancelacion").reduce((a,v)=>a+v.vol,0)-vmMes.filter(v=>v.tipo==="Cancelacion").reduce((a,v)=>a+v.vol,0);
+  const faltMTD=Math.max(0,BUDGET-volMTD);
+  const fFmt=(dr.fecha||td).split("-").reverse().join(" / ");
+  let txt="*SECRETS MIRABEL -- REPORTE DEL DIA*\n"+fFmt+"\n========================\n";
+  txt+="Q's: "+dr.qs+"\nVol: "+FMT(+(dr.vol||0))+"\nVPG: "+FMT(+(dr.vpg||0))+"\n";
+  txt+="% Cierre total: "+dr.pctC+"%\n% Cierre s/Ch: "+dr.pctCS+"%\n";
+  txt+="Ventas: "+dr.vtasT+" | Choices: "+dr.vtasCh+"\nContratos: "+dr.cont+"\nPremiere: "+dr.prem+"sem | Turquia: "+dr.tq+"\nCertificados: "+dr.cert+"\n";
+  txt+="========================\n*VENTAS DEL DIA*\n";
+  vDia.forEach(v=>{txt+=FMT(v.vol)+" | "+getName(v.rep_id)+" / "+getName(v.cerr_id)+" | "+(v.tipo==="Socio/Upgrade"?"SOCIO":"AGENCIA")+" | "+v.mem+" | "+v.loc+" | Eng:"+v.pctEng+"% | Prem:"+v.premiere+"sem | TQ:"+v.turquia+"\n";});
+  if(vDia.length===0)txt+="Sin ventas\n";
+  if(cxlDia.length>0){txt+="\nCANCELACIONES:\n";cxlDia.forEach(v=>{txt+=FMT(v.vol)+" | "+v.cliente+"\n";});}
+  if(dr.pend)txt+="\nVENTA PENDIENTE:\n"+dr.pend+"\n";
+  txt+="========================\n*LOCACION*\n";
+  Object.entries(zonas).forEach(([zona,zdata])=>{
+    let zonaHasData=false;
+    const zonaLines=[];
+    (zdata.hoteles||[]).forEach(hotel=>{
+      (zdata.locs[hotel]||[]).forEach(loc=>{
+        const v=dr.ld&&dr.ld[loc];
+        if(v&&(v.qs||v.vol)){
+          if(!zonaHasData){zonaLines.push(zona.toUpperCase()+":\n");zonaHasData=true;}
+          zonaLines.push("  "+loc+": "+(v.qs||0)+" Q's | "+(v.vol?FMT(+v.vol):"$0")+"\n");
+        }
+      });
+    });
+    zonaLines.forEach(l=>{txt+=l;});
+  });
+  S.locsExtra.forEach(loc=>{const v=dr.ld&&dr.ld[loc];if(v&&(v.qs||v.vol))txt+="Extra - "+loc+": "+(v.qs||0)+" Q's | "+(v.vol?FMT(+v.vol):"$0")+"\n";});
+  // Linea del dia — quien trabaja hoy
+  const trabajando=users.filter(u=>u.activo&&trabajaHoy(u,td));
+  const noTrabajan=users.filter(u=>u.activo&&!trabajaHoy(u,td));
+  txt+="========================\nLINEA DEL DIA:\n";
+  txt+="Disponibles ("+trabajando.length+"): "+trabajando.map(u=>u.n.split(" ")[0]).join(", ")+"\n";
+  if(noTrabajan.length>0){txt+="No disponibles: "+noTrabajan.map(u=>u.n.split(" ")[0]+" ("+statusDia(u,td).status+")").join(", ")+"\n";}
+  txt+="========================\nMONTH TO DATE:\nBudget: "+FMT(BUDGET)+"\nMTD: "+FMT(volMTD)+"\nFaltante: "+FMT(faltMTD)+"\n";
+  if(dr.notas)txt+="\n"+dr.notas;
+  const num=(S.waNum||"").replace(/\D/g,"");
+  if(!num){alert("Ingresa un numero de WhatsApp primero");return;}
+  window.open("https://wa.me/"+num+"?text="+encodeURIComponent(txt),"_blank");
+};
+
+// ── WHATSAPP LINEA ────────────────────────────────────────────────────────
+function generarTextoLinea(tipo){
+  const hoyStr=todayStr();
+  const ayerStr=getAyer();
+  const d=hoy;
+  const DIAS=["Domingo","Lunes","Martes","Miercoles","Jueves","Viernes","Sabado"];
+  const MESES2=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const diaLetra=DIAS[d.getDay()];
+  const diaNum=d.getDate();
+  const mesLetra=MESES2[d.getMonth()];
+  const anio=d.getFullYear();
+  const diaDelMes=d.getDate();
+  let txt="";
+
+  if(tipo==="reps"){
+    const L=calcularLineaReps();
+    txt+=`SECRETS MIRABEL
+`;
+    txt+=`LINEA REPS — ${diaLetra.toUpperCase()} ${diaNum} ${mesLetra.toUpperCase()} ${anio}
+`;
+    txt+=`Dia ${diaDelMes} del mes
+`;
+    txt+=`${"-".repeat(28)}
+
+`;
+    let pos=1;
+    if(L.vendieron.length>0){
+      txt+=`POWER — VENDIERON AYER
+`;
+      L.vendieron.forEach(u=>{txt+=`  ${pos}. ${u.n.toUpperCase()} [${u.posicion}] $${volAyerRep(u.id).toLocaleString("es-MX")}
+`;pos++;});
+      txt+=`
+`;
+    }
+    if(L.descansaronAyer.length>0){
+      txt+=`DESCANSARON AYER
+`;
+      L.descansaronAyer.forEach(u=>{txt+=`  ${pos}. ${u.n.toUpperCase()} [${u.posicion}]
+`;pos++;});
+      txt+=`
+`;
+    }
+    if(L.noTomaronPareja.length>0){
+      txt+=`SIN PAREJA AYER
+`;
+      L.noTomaronPareja.forEach(u=>{txt+=`  ${pos}. ${u.n.toUpperCase()} [${u.posicion}]
+`;pos++;});
+      txt+=`
+`;
+    }
+    if(L.rotacion.length>0){
+      const t=diaDelMes<=10?`ROTACION (Dia ${diaDelMes}/10)`:`POR VOLUMEN ACUMULADO`;
+      txt+=`${t}
+`;
+      L.rotacion.forEach(u=>{const v=volAgMes(u.id);txt+=`  ${pos}. ${u.n.toUpperCase()} [${u.posicion}]${v>0?" — $"+v.toLocaleString("es-MX"):""}
+`;pos++;});
+      txt+=`
+`;
+    }
+    if(L.descansoHoy.length>0){
+      txt+=`DESCANSO HOY
+`;
+      L.descansoHoy.forEach(u=>{const sd=statusDia(u,hoyStr);txt+=`  • ${u.n.toUpperCase()} — ${sd.status.toUpperCase()}
+`;});
+      txt+=`
+`;
+    }
+    const total=L.vendieron.length+L.descansaronAyer.length+L.noTomaronPareja.length+L.rotacion.length;
+    txt+=`${"-".repeat(28)}
+`;
+    txt+=`TOTAL ACTIVOS: ${total}${L.descansoHoy.length>0?" | OFF: "+L.descansoHoy.length:""}
+`;
+    const vm=filtMes(ventas,hoy.getMonth(),hoy.getFullYear()).filter(v=>v.tipo==="Agencia"&&!v.cancelado);
+    const volMes=vm.reduce((a,v)=>a+v.vol,0);
+    if(volMes>0){
+      txt+=`VOL MES AG: $${volMes.toLocaleString("es-MX")}
+`;
+      txt+=`BUDGET: $${BUDGET.toLocaleString("es-MX")} | FALTANTE: $${Math.max(0,BUDGET-volMes).toLocaleString("es-MX")}
+`;
+    }
+  } else {
+    const L=calcularLineaCerr();
+    txt+=`SECRETS MIRABEL
+`;
+    txt+=`LINEA CERRADORES — ${diaLetra.toUpperCase()} ${diaNum} ${mesLetra.toUpperCase()} ${anio}
+`;
+    txt+=`Dia ${diaDelMes} del mes
+`;
+    txt+=`${"-".repeat(28)}
+
+`;
+    let pos=1;
+    if(L.vendieron.length>0){
+      txt+=`POWER — VENDIERON AYER
+`;
+      L.vendieron.forEach(u=>{txt+=`  ${pos}. ${u.n.toUpperCase()} $${volAyerCerr(u.id).toLocaleString("es-MX")}
+`;pos++;});
+      txt+=`
+`;
+    }
+    if(L.rotacion.length>0){
+      txt+=`ROTACION POR VOLUMEN
+`;
+      L.rotacion.forEach(u=>{const v=volAgMesCerr(u.id);txt+=`  ${pos}. ${u.n.toUpperCase()}${v>0?" — $"+v.toLocaleString("es-MX"):""}
+`;pos++;});
+      txt+=`
+`;
+    }
+    if(L.descansoHoy.length>0){
+      txt+=`DESCANSO HOY
+`;
+      L.descansoHoy.forEach(u=>{const sd=statusDia(u,hoyStr);txt+=`  • ${u.n.toUpperCase()} — ${sd.status.toUpperCase()}
+`;});
+    }
+  }
+  return txt;
+}
+
+window.enviarLineaWA=(tipo)=>{
+  const txt=generarTextoLinea(tipo);
+  const num=(S.waNum||"").replace(/[^0-9]/g,"");
+  if(!num){alert("Ingresa un numero de WhatsApp primero");return;}
+  window.open("https://wa.me/"+num+"?text="+encodeURIComponent(txt),"_blank");
+};
+
+// ── ACCIONES LINEA ────────────────────────────────────────────────────────
+window.marcarPareja=(uid,tomo)=>{
+  const ayer=getAyer();
+  if(!lineaData[ayer])lineaData[ayer]={};
+  if(!lineaData[ayer][uid])lineaData[ayer][uid]={};
+  lineaData[ayer][uid].tomoPareja=tomo;
+  // Tambien registrar si vendio (volumen de ayer)
+  const volAyer=ventas
+    .filter(v=>v.fecha===ayer&&v.rep_id===uid&&v.tipo==="Agencia"&&!v.cancelado)
+    .reduce((a,v)=>a+v.vol,0);
+  lineaData[ayer][uid].vendioVol=volAyer;
+  saveRender();
+};
+
+// ── ACCIONES ZONAS ────────────────────────────────────────────────────────
+window.agregarHotel=zona=>{
+  const nombre=prompt("Nombre del nuevo hotel:");
+  if(!nombre||!nombre.trim())return;
+  const n=nombre.trim();
+  if(!zonas[zona])return;
+  if(!zonas[zona].hoteles)zonas[zona].hoteles=[];
+  if(zonas[zona].hoteles.includes(n)){alert("Ese hotel ya existe en esta zona.");return;}
+  zonas[zona].hoteles.push(n);
+  if(!zonas[zona].locs)zonas[zona].locs={};
+  zonas[zona].locs[n]=[];
+  saveRender();
+};
+window.quitarHotel=(zona,hotel)=>{
+  if(!confirm("¿Quitar "+hotel+" de "+zona+"?"))return;
+  if(!zonas[zona])return;
+  zonas[zona].hoteles=(zonas[zona].hoteles||[]).filter(h=>h!==hotel);
+  if(zonas[zona].locs)delete zonas[zona].locs[hotel];
+  saveRender();
+};
+window.agregarLoc2=(zona,hotel,inputId)=>{
+  const el=document.getElementById(inputId);
+  if(!el)return;
+  const loc=el.value.trim().toUpperCase();
+  if(!loc){alert("Escribe el codigo de la locacion");return;}
+  if(!zonas[zona]||!zonas[zona].locs)return;
+  if(!zonas[zona].locs[hotel])zonas[zona].locs[hotel]=[];
+  if(zonas[zona].locs[hotel].includes(loc)){alert("Esa locacion ya existe en este hotel.");return;}
+  zonas[zona].locs[hotel].push(loc);
+  el.value="";
+  saveRender();
+};
+window.quitarLoc=(zona,hotel,loc)=>{
+  if(!zonas[zona]||!zonas[zona].locs||!zonas[zona].locs[hotel])return;
+  zonas[zona].locs[hotel]=zonas[zona].locs[hotel].filter(l=>l!==loc);
+  saveRender();
+};
+window.agregarZona=()=>{
+  const nombre=(document.getElementById("new_zona_name")||{}).value?.trim();
+  if(!nombre){alert("Escribe el nombre de la zona");return;}
+  if(zonas[nombre]){alert("Esa zona ya existe");return;}
+  zonas[nombre]={hoteles:[],locs:{}};
+  saveRender();
+};
+
+// ── INIT ─────────────────────────────────────────────────────────────────
+// Mostrar login con datos locales primero (inmediato)
+renderLogin();
+// Luego cargar desde Firebase en segundo plano y actualizar
+cargarDesdeFirebase();
+
+// ── PWA: Prompt para instalar en pantalla de inicio ────────────────────
+let deferredPrompt=null;
+window.addEventListener("beforeinstallprompt",e=>{
+  e.preventDefault();
+  deferredPrompt=e;
+  // Mostrar banner de instalacion despues de 3 segundos
+  setTimeout(()=>{
+    if(deferredPrompt&&!localStorage.getItem("pwa_installed")){
+      mostrarBannerInstalar();
+    }
+  },3000);
+});
+window.addEventListener("appinstalled",()=>{
+  localStorage.setItem("pwa_installed","1");
+  const b=document.getElementById("pwa_banner");
+  if(b)b.remove();
+});
+
+function mostrarBannerInstalar(){
+  if(document.getElementById("pwa_banner"))return;
+  const b=document.createElement("div");
+  b.id="pwa_banner";
+  b.style.cssText="position:fixed;bottom:80px;left:50%;transform:translateX(-50%);width:calc(100% - 28px);max-width:440px;background:#0d1526;border:1px solid #00e5b8;border-radius:14px;padding:12px 14px;z-index:999;display:flex;align-items:center;gap:10px;box-shadow:0 4px 20px rgba(0,229,184,.2)";
+  b.innerHTML=`
+    <div style="font-size:30px">📲</div>
+    <div style="flex:1">
+      <div style="font-size:19px;font-weight:900;color:#00e5b8">Instalar como App</div>
+      <div style="font-size:26px;color:#7a90b8;margin-top:2px">Agrega Sales Report a tu pantalla de inicio</div>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button onclick="document.getElementById('pwa_banner').remove();localStorage.setItem('pwa_installed','skip')" style="background:transparent;border:1px solid #1a2d4a;border-radius:14px;padding:6px 10px;color:#7a90b8;font-size:26px;font-weight:800">Ahora no</button>
+      <button onclick="instalarPWA()" style="background:#00e5b8;border:none;border-radius:14px;padding:6px 12px;color:#070b14;font-size:26px;font-weight:900">Instalar</button>
+    </div>`;
+  document.body.appendChild(b);
+}
+
+window.instalarPWA=async()=>{
+  if(deferredPrompt){
+    deferredPrompt.prompt();
+    const{outcome}=await deferredPrompt.userChoice;
+    if(outcome==="accepted"){localStorage.setItem("pwa_installed","1");}
+    deferredPrompt=null;
+    const b=document.getElementById("pwa_banner");
+    if(b)b.remove();
+  }
+};
+</script>
+</body>
+</html>
