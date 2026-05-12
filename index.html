@@ -27,7 +27,7 @@ html,body{
   width:100%;
   /* espacio arriba = notch, abajo = tabs + home indicator */
   padding-top:env(safe-area-inset-top,0px);
-  padding-bottom:calc(60px + env(safe-area-inset-bottom,0px));
+  padding-bottom:calc(80px + env(safe-area-inset-bottom,0px));
 }
 .app-header{
   position:sticky;
@@ -312,7 +312,7 @@ function renderHeader(){
 function renderTabs(){
   const tabs=isRep()?[["r","Rank"],["m","MVPs"],["l","Linea"],["c","Cal"],["v","Ventas"],["p","Perfil"]]:[["r","Reporte"],["m","MVPs"],["l","Linea"],["c","Cal"],["v","Ventas"],["e","Equipo"],["z","Zonas"],["p","Perfil"]];
   return`<div class="app-tabs">
-    ${tabs.map(([id,lb])=>`<button onclick="go('${id}')" style="flex:1;background:none;border:none;border-top:3px solid ${S.tab===id?C.acc:"transparent"};padding:10px 2px 8px;font-size:10px;font-weight:800;color:${S.tab===id?C.acc:C.mut};text-transform:uppercase;letter-spacing:0">${lb}</button>`).join("")}
+    ${tabs.map(([id,lb])=>`<button onclick="go('${id}')" style="flex:1;background:none;border:none;border-top:3px solid ${S.tab===id?C.acc:"transparent"};padding:14px 2px 12px;font-size:13px;font-weight:800;color:${S.tab===id?C.acc:C.mut};text-transform:uppercase;letter-spacing:0">${lb}</button>`).join("")}
   </div>`;
 }
 
