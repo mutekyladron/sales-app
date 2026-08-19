@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Gandhi · Firma de Entrega</title>
+<style>
+  :root{
+    --purple:#5b1f7a;
+    --purple-deep:#3d1454;
+    --purple-soft:#efe6f5;
+    --yellow:#f4e94b;
+    --cream:#faf8f2;
+    --ink:#211a2b;
+    --muted:#8a7e97;
+    --line:#c9bdd6;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  html,body{margin:0;padding:0;background:#2a1938;color:var(--ink);
+    font-family: -apple-system, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  body{
+    min-height:100vh;
+    padding: max(16px, env(safe-area-inset-top)) 14px max(28px, env(safe-area-inset-bottom));
+    display:flex; flex-direction:column; align-items:center; gap:16px;
+  }
+  .card-shell{ width:100%; max-width:380px; }
+  #card{
+    width:100%; border-radius:16px; overflow:hidden;
+    box-shadow: 0 18px 40px rgba(0,0,0,0.45);
+    background: var(--cream);
+  }
+  .band{
+    background: var(--purple); padding:18px 20px 20px;
+  }
+  .band .eyebrow{ color: var(--yellow); font-weight:800; font-size:12px; letter-spacing:.06em; }
+  .band h1{ color:#fff; font-size:20px; font-weight:800; margin:6px 0 3px; }
+  .band p{ color:#e7dcf0; font-size:12.5px; margin:0; }
+
+  .panel{ padding:18px 20px 20px; }
+
+  .notice{
+    border:1.5px solid var(--purple); background:var(--purple-soft); border-radius:10px;
+    padding:10px 12px; text-align:center; margin-bottom:18px;
+  }
+  .notice b{ display:block; color:var(--purple-deep); font-size:11.5px; letter-spacing:.03em; margin-bottom:3px; }
+  .notice span{ color:#5a4a68; font-size:11px; line-height:1.4; }
+
+  .section-title{ color:var(--purple-deep); font-weight:800; font-size:12.5px; letter-spacing:.04em;
+    text-transform:uppercase; margin:0 0 10px; }
+
+  .field{ margin-bottom:13px; }
+  .field label{ display:block; color:var(--muted); font-weight:700; font-size:10px; letter-spacing:.04em;
+    text-transform:uppercase; margin-bottom:4px; }
+  .field input{
+    width:100%; border:none; border-bottom:1.5px solid var(--line); background:transparent;
+    font-size:15px; color:var(--ink); padding:4px 0 6px; outline:none; font-family:inherit;
+  }
+  .field input:focus{ border-color: var(--purple); }
+  .field .display{ display:none; font-size:15px; padding:4px 0 6px; min-height:1.3em; }
+  .field .display.empty{ color:#b6a9c4; }
+  #card.capturing .field input{ display:none; }
+  #card.capturing .field .display{ display:block; }
+
+  .hair{ height:1px; background:var(--line); margin:16px 0; }
+
+  .sig-label-row{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:7px; }
+  .sig-label-row label{ color:var(--muted); font-weight:700; font-size:10px; letter-spacing:.04em; text-transform:uppercase; }
+  #clearSig{ background:none; border:none; color:var(--purple); font-weight:700; font-size:11px; cursor:pointer; padding:2px; }
+  .sig-wrap{ position:relative; height:130px; border:1.5px solid var(--purple); border-radius:10px; overflow:hidden; background:#fff; }
+  .sig-wrap canvas{ width:100%; height:100%; display:block; touch-action:none; }
+  .sig-placeholder{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:#c3b6d1; font-size:12px; font-style:italic; pointer-events:none; text-align:center; padding:0 20px; }
+
+  .stamp{ position:absolute; right:16px; bottom:16px; width:78px; height:78px;
+    display:flex; align-items:center; justify-content:center; opacity:0;
+    transform: rotate(-16deg) scale(1.4); transition: opacity .2s ease, transform .4s cubic-bezier(.2,1.4,.4,1);
+    pointer-events:none; }
+  .stamp.show{ opacity:.85; transform: rotate(-12deg) scale(1); }
+  .stamp svg{ width:100%; height:100%; }
+
+  .footnote{ text-align:center; color:#b6a9c4; font-size:9.5px; margin-top:14px; }
+
+  .controls{ width:100%; max-width:380px; display:flex; flex-direction:column; gap:10px; }
+  .btn{ appearance:none; border:none; border-radius:11px; padding:15px 16px; font-weight:800; font-size:14px;
+    cursor:pointer; text-align:center; display:flex; align-items:center; justify-content:center; gap:8px; }
+  .btn-primary{ background: var(--yellow); color: var(--purple-deep); box-shadow:0 6px 18px rgba(244,233,75,0.25); }
+  .btn-primary:disabled{ opacity:.5; }
+  .btn-secondary{ background: rgba(255,255,255,0.08); color:#e7dcf0; border:1px solid rgba(255,255,255,0.15); }
+  .btn-ghost{ background: transparent; color:#c3b6d1; border:1px solid rgba(255,255,255,0.18); }
+  .hint{ font-size:12px; text-align:center; color:#c3b6d1; opacity:.85; line-height:1.4; padding:0 6px; }
+
+  .result{ display:none; width:100%; max-width:380px; flex-direction:column; align-items:center; gap:10px; margin-top:2px; }
+  .result.show{ display:flex; }
+  .result img{ width:100%; border-radius:14px; box-shadow: 0 18px 40px rgba(0,0,0,0.45); }
+  .result .hint{ font-size:11.5px; }
+
+  .app-title{ text-align:center; color:#e7dcf0; }
+  .app-title .tag{ color:var(--yellow); font-weight:800; font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
+  .app-title h2{ font-size:17px; margin:4px 0 0; color:#fff; }
+</style>
+</head>
+<body>
+
+  <div class="app-title">
+    <div class="tag">Librerías Gandhi</div>
+    <h2>Firma de Entrega</h2>
+  </div>
+
+  <div class="card-shell">
+    <div id="card">
+      <div class="band">
+        <div class="eyebrow">LIBRERÍAS GANDHI</div>
+        <h1>Comprobante de Entrega</h1>
+        <p>Envío de regalo — entrega personal</p>
+      </div>
+      <div class="panel">
+        <div class="notice">
+          <b>ENTREGA EXCLUSIVA AL DESTINATARIO</b>
+          <span>Solicita identificación. Este paquete solo puede recibirlo la persona indicada abajo.</span>
+        </div>
+
+        <div class="section-title">Destinatario del regalo</div>
+        <div class="field">
+          <label for="destinatario">Nombre completo</label>
+          <input id="destinatario" type="text" placeholder="A quién va dirigido el regalo" autocomplete="off">
+          <div class="display empty" id="destinatarioDisplay">A quién va dirigido el regalo</div>
+        </div>
+        <div class="field">
+          <label for="referencia">N.º de pedido / referencia (opcional)</label>
+          <input id="referencia" type="text" placeholder="—" autocomplete="off">
+          <div class="display empty" id="referenciaDisplay">—</div>
+        </div>
+
+        <div class="hair"></div>
+
+        <div class="section-title">Recibí conforme</div>
+        <div class="field">
+          <label for="nombreRecibe">Nombre de quien recibe</label>
+          <input id="nombreRecibe" type="text" placeholder="Nombre de quien firma" autocomplete="off">
+          <div class="display empty" id="nombreRecibeDisplay">Nombre de quien firma</div>
+        </div>
+        <div class="field">
+          <label for="fecha">Fecha</label>
+          <input id="fecha" type="text" autocomplete="off">
+          <div class="display" id="fechaDisplay"></div>
+        </div>
+
+        <div class="sig-label-row">
+          <label>Firma de recepción</label>
+          <button type="button" id="clearSig">Borrar</button>
+        </div>
+        <div class="sig-wrap">
+          <canvas id="sigCanvas"></canvas>
+          <div class="sig-placeholder" id="sigPlaceholder">La persona firma aquí con el dedo</div>
+        </div>
+
+        <div class="footnote">Este comprobante certifica la entrega física del envío al destinatario indicado.</div>
+      </div>
+
+      <div class="stamp" id="stamp">
+        <svg viewBox="0 0 200 200">
+          <defs><path id="ringPath" d="M 100,100 m -78,0 a 78,78 0 1,1 156,0 a 78,78 0 1,1 -156,0" /></defs>
+          <circle cx="100" cy="100" r="92" fill="none" stroke="#5b1f7a" stroke-width="5" opacity="0.9"/>
+          <circle cx="100" cy="100" r="76" fill="none" stroke="#5b1f7a" stroke-width="2" opacity="0.7"/>
+          <text font-size="14" letter-spacing="2" fill="#5b1f7a"><textPath href="#ringPath" startOffset="2%">GANDHI • ENTREGADO •</textPath></text>
+          <text x="100" y="98" text-anchor="middle" font-size="26" font-weight="bold" fill="#5b1f7a" transform="rotate(-4 100 100)">ENTREGADO</text>
+          <text x="100" y="122" text-anchor="middle" font-size="11" fill="#5b1f7a" transform="rotate(-4 100 100)" id="stampDate">— — —</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn-primary" id="generateBtn">Generar comprobante</button>
+    <button class="btn btn-secondary" id="shareAgainBtn" style="display:none;">Compartir por WhatsApp</button>
+    <button class="btn btn-ghost" id="resetBtn">Nueva entrega</button>
+    <p class="hint" id="mainHint">Llena los datos, pide la firma de quien recibe y genera el comprobante para enviarlo por WhatsApp.</p>
+  </div>
+
+  <div class="result" id="result">
+    <img id="resultImg" alt="Comprobante generado">
+    <p class="hint">Si el botón de compartir no abre WhatsApp automáticamente, mantén presionada la imagen para guardarla y envíala desde ahí.</p>
+  </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script>
+(function(){
+  const card = document.getElementById('card');
+
+  function fmtDate(d){
+    const meses = ['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
+    return String(d.getDate()).padStart(2,'0') + ' ' + meses[d.getMonth()] + ' ' + d.getFullYear();
+  }
+  const fechaInput = document.getElementById('fecha');
+  const fechaDisplay = document.getElementById('fechaDisplay');
+  const stampDate = document.getElementById('stampDate');
+  function setToday(){
+    const today = fmtDate(new Date());
+    fechaInput.value = today; fechaDisplay.textContent = today; stampDate.textContent = today;
+  }
+  setToday();
+  fechaInput.addEventListener('input', ()=>{
+    fechaDisplay.textContent = fechaInput.value || '—';
+    stampDate.textContent = fechaInput.value || '—';
+  });
+
+  function bindField(inputId, displayId, placeholder){
+    const input = document.getElementById(inputId);
+    const display = document.getElementById(displayId);
+    input.addEventListener('input', ()=>{
+      const v = input.value.trim();
+      display.textContent = v || placeholder;
+      display.classList.toggle('empty', !v);
+    });
+  }
+  bindField('destinatario','destinatarioDisplay','A quién va dirigido el regalo');
+  bindField('referencia','referenciaDisplay','—');
+  bindField('nombreRecibe','nombreRecibeDisplay','Nombre de quien firma');
+
+  const canvas = document.getElementById('sigCanvas');
+  const ctx = canvas.getContext('2d');
+  const placeholder = document.getElementById('sigPlaceholder');
+  let drawing = false, hasSignature = false;
+  let last = {x:0,y:0};
+
+  function resizeCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    const prev = hasSignature ? canvas.toDataURL() : null;
+    canvas.width = rect.width * ratio;
+    canvas.height = rect.height * ratio;
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    ctx.lineWidth = 2.6; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle = '#211a2b';
+    if(prev){ const img = new Image(); img.onload = ()=> ctx.drawImage(img,0,0, rect.width, rect.height); img.src = prev; }
+  }
+  new ResizeObserver(resizeCanvas).observe(canvas);
+  window.addEventListener('load', resizeCanvas);
+  setTimeout(resizeCanvas, 50);
+
+  function pos(e){ const rect = canvas.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e;
+    return { x: p.clientX - rect.left, y: p.clientY - rect.top }; }
+  function start(e){ e.preventDefault(); drawing = true; hasSignature = true; placeholder.style.display='none'; last = pos(e); }
+  function move(e){ if(!drawing) return; e.preventDefault(); const p = pos(e);
+    ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last = p; }
+  function end(){ drawing = false; }
+  canvas.addEventListener('pointerdown', start);
+  canvas.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', end);
+  canvas.addEventListener('touchstart', start, {passive:false});
+  canvas.addEventListener('touchmove', move, {passive:false});
+  canvas.addEventListener('touchend', end);
+
+  function clearSignature(){
+    const rect = canvas.getBoundingClientRect();
+    ctx.clearRect(0,0,rect.width,rect.height);
+    hasSignature = false; placeholder.style.display = 'flex';
+  }
+  document.getElementById('clearSig').addEventListener('click', clearSignature);
+
+  const generateBtn = document.getElementById('generateBtn');
+  const shareAgainBtn = document.getElementById('shareAgainBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const resultBox = document.getElementById('result');
+  const resultImg = document.getElementById('resultImg');
+  const mainHint = document.getElementById('mainHint');
+  const stamp = document.getElementById('stamp');
+  let lastBlob = null;
+
+  async function renderCard(){
+    card.classList.add('capturing');
+    stamp.classList.add('show');
+    await new Promise(r=>setTimeout(r,60));
+    const canvasOut = await html2canvas(card, {backgroundColor:'#faf8f2', scale:3, useCORS:true});
+    card.classList.remove('capturing');
+    return new Promise(resolve=>{ canvasOut.toBlob(blob=>resolve(blob), 'image/png', 1.0); });
+  }
+
+  generateBtn.addEventListener('click', async ()=>{
+    if(!hasSignature){
+      mainHint.textContent = 'Falta la firma de quien recibe: pídele que firme con el dedo antes de generar.';
+      mainHint.style.color = '#f3b0b0';
+      return;
+    }
+    generateBtn.disabled = true; generateBtn.textContent = 'Generando…';
+    try{
+      const blob = await renderCard();
+      lastBlob = blob;
+      resultImg.src = URL.createObjectURL(blob);
+      resultBox.classList.add('show');
+      mainHint.style.color = '';
+      mainHint.textContent = 'Comprobante generado. Compártelo por WhatsApp o guárdalo.';
+      shareAgainBtn.style.display = 'flex';
+      await tryShare(blob);
+    } catch(err){
+      mainHint.textContent = 'No se pudo generar la imagen. Mantén presionada la tarjeta e intenta guardarla manualmente.';
+    } finally {
+      generateBtn.disabled = false; generateBtn.textContent = 'Generar comprobante';
+    }
+  });
+
+  shareAgainBtn.addEventListener('click', ()=>{ if(lastBlob) tryShare(lastBlob); });
+
+  resetBtn.addEventListener('click', ()=>{
+    document.getElementById('destinatario').value='';
+    document.getElementById('referencia').value='';
+    document.getElementById('nombreRecibe').value='';
+    ['destinatarioDisplay','referenciaDisplay','nombreRecibeDisplay'].forEach(id=>{});
+    bindField; // no-op reference to keep linter quiet
+    document.getElementById('destinatarioDisplay').textContent='A quién va dirigido el regalo';
+    document.getElementById('destinatarioDisplay').classList.add('empty');
+    document.getElementById('referenciaDisplay').textContent='—';
+    document.getElementById('referenciaDisplay').classList.add('empty');
+    document.getElementById('nombreRecibeDisplay').textContent='Nombre de quien firma';
+    document.getElementById('nombreRecibeDisplay').classList.add('empty');
+    setToday();
+    clearSignature();
+    resultBox.classList.remove('show');
+    shareAgainBtn.style.display = 'none';
+    mainHint.style.color='';
+    mainHint.textContent = 'Listo para la siguiente entrega.';
+  });
+
+  async function tryShare(blob){
+    const file = new File([blob], 'comprobante-entrega-gandhi.png', {type:'image/png'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      try{
+        await navigator.share({ files:[file], title:'Comprobante de entrega · Gandhi',
+          text:'Confirmación de entrega del envío.' });
+        return;
+      } catch(e){}
+    }
+    mainHint.textContent = 'Tu navegador no permite compartir directo. Mantén presionada la imagen de abajo para guardarla y envíala por WhatsApp.';
+  }
+})();
+</script>
+</body>
+</html>
